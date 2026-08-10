@@ -4,39 +4,44 @@ import sys
 import html
 import random
 import fcntl
+import time
+import datetime
+import platform
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatPermissions
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, MessageReactionHandler
 from telegram.constants import ParseMode
-from admin import get_admin_handlers
-from welcome import get_welcome_handlers
-from block_content import get_block_content_handlers
-from clean_service import get_clean_service_handlers
-from auto_delete import get_auto_delete_handlers
-from moderation import get_moderation_handlers
-from filter import get_filter_handlers
-from bot_protection import get_bot_protection_handlers
-from link_spam import get_link_spam_handlers
-from forward_protection import get_forward_protection_handlers
-from settings import get_settings_handlers
-from help import get_help_handlers
-from translator import get_translation_handlers
-from language_filter import get_language_handlers
-from sticker_manager import get_sticker_handlers
-from blocking_handler import get_blocking_handlers, get_blocking_command_handlers
-from edit_handler import get_edit_handlers
-from bio_handler import get_bio_handlers
-from join_request import get_join_request_handlers
-from broadcast import broadcast_command
-from antiflood import get_antiflood_handlers
-from nightmode import get_nightmode_handlers
-from font_normalizer import normalize_text
-from recurring import get_recurring_handlers, check_recurring_messages, count_recurring_messages
-from Manager import get_manager_handlers
-from tagger import get_tagger_handlers
-from config import BOT_TOKEN, LOG_CHANNEL_ID, OWNER_ID, log_to_channel, send_bot_response, send_bot_media, START_IMG, to_small_caps, colored_button
-from voice_chat import start_voice_chat_monitor, stop_voice_chat_monitor, get_voice_chat_handlers
-from user_manager_mongo import cache_user_handler, get_user_id, get_user_stats, is_user_admin, get_sangmata_handlers
-from settings_manager_mongo import get_chat_settings
+
+BOT_START_TIME = datetime.datetime.now()
+from moderation.admin import get_admin_handlers
+from handlers.welcome import get_welcome_handlers
+from moderation.block_content import get_block_content_handlers
+from features.clean_service import get_clean_service_handlers
+from features.auto_delete import get_auto_delete_handlers
+from moderation.moderation import get_moderation_handlers
+from moderation.filter import get_filter_handlers
+from moderation.bot_protection import get_bot_protection_handlers
+from moderation.link_spam import get_link_spam_handlers
+from moderation.forward_protection import get_forward_protection_handlers
+from features.settings import get_settings_handlers
+from features.help import get_help_handlers
+from features.translator import get_translation_handlers
+from moderation.language_filter import get_language_handlers
+from features.sticker_manager import get_sticker_handlers
+from handlers.blocking_handler import get_blocking_handlers, get_blocking_command_handlers
+from handlers.edit_handler import get_edit_handlers
+from handlers.bio_handler import get_bio_handlers
+from features.join_request import get_join_request_handlers
+from features.broadcast import broadcast_command
+from moderation.antiflood import get_antiflood_handlers
+from features.nightmode import get_nightmode_handlers
+from features.font_normalizer import normalize_text
+from features.recurring import get_recurring_handlers, check_recurring_messages, count_recurring_messages
+from managers import get_manager_handlers
+from features.tagger import get_tagger_handlers
+from core.config import BOT_TOKEN, LOG_CHANNEL_ID, OWNER_ID, log_to_channel, send_bot_response, send_bot_media, START_IMG, to_small_caps, colored_button
+from features.voice_chat import start_voice_chat_monitor, stop_voice_chat_monitor, get_voice_chat_handlers
+from managers.user_manager_mongo import cache_user_handler, get_user_id, get_user_stats, is_user_admin, get_sangmata_handlers
+from managers.settings_manager_mongo import get_chat_settings
 
 # Configure logging
 logging.basicConfig(
@@ -52,38 +57,44 @@ logger = logging.getLogger(__name__)
 def _start_keyboard(add_to_group_url):
     """Build the /start inline keyboard (shared by start + Back nav)."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(colored_button("+ ᴀᴅᴅ ᴍᴇ ɪɴ ɢʀᴏᴜᴘ +", "green"), url=add_to_group_url)],
+        [InlineKeyboardButton(colored_button(to_small_caps("ᴀᴅᴅ ᴍᴇ ɪɴ ɢʀᴏᴜᴘ"), "green"), url=add_to_group_url)],
         [
-            InlineKeyboardButton(colored_button("🎶 𝗠𝘂𝘀𝗶𝗰 𝗪𝗼𝗿𝗹𝗱", "blue"), callback_data="music_world"),
-            InlineKeyboardButton(colored_button("⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", "blue"), callback_data="help_open")
+            InlineKeyboardButton(colored_button("𝗠𝘂𝘀𝗶𝗰 𝗪𝗼𝗿𝗹𝗱", "green"), callback_data="music_world")
         ],
         [
-            InlineKeyboardButton(colored_button(to_small_caps("「 Support 」"), "blue"), url="https://t.me/jayden_clan"),
-            InlineKeyboardButton(colored_button(to_small_caps("「 Updates 」"), "red"), url="https://t.me/Tele_212_bots")
+            InlineKeyboardButton(colored_button(to_small_caps("「 Support 」"), "green"), url="https://t.me/jayden_clan"),
+            InlineKeyboardButton(colored_button(to_small_caps("「 Updates 」"), "green"), url="https://t.me/Tele_212_bots")
         ],
         [
-            InlineKeyboardButton(colored_button(to_small_caps("「 Owner 」"), "red"), url=f"tg://user?id={OWNER_ID}")
+            InlineKeyboardButton(colored_button(to_small_caps("「 Owner 」"), "green"), url=f"tg://user?id={OWNER_ID}")
         ]
     ])
 
 def _start_caption(bot_mention, user_mention):
     """Build the /start caption (shared by start + Back nav)."""
     return (
-        f"── 「 {bot_mention} 」 ──\n\n"
-        f"<blockquote>"
-        f"<b>💜 𝐇єу 𝐓нєяє • 🎙 {user_mention} ! 🎶</b>"
-        f"</blockquote>\n"
-        f"<blockquote>"
-        f"<b>» ᴅɪᴛᴄʜ ᴛʜᴇ ᴛʜʀᴇᴀᴅs, ʟᴇᴛ's ᴠɪʙᴇ ᴛᴏ ᴛʜᴇ ʀʜʏᴛʜᴍ.\n"
-        f"◎ ᴊᴏɪɴ ᴍᴇ ᴏɴ ᴛᴇʟᴇɢʀᴀᴍ's ᴄᴜᴛɪᴇsᴛ ʙᴏᴛ. 🎶</b>"
-        f"</blockquote>"
+        f"<tg-emoji emoji-id=\"6242354082741230982\">🐺</tg-emoji>  Hey {user_mention}, \n"
+        f"This is {bot_mention} ! \n\n"
+        f"<tg-emoji emoji-id=\"5280555367221197240\">😽</tg-emoji>  A group help bot with some awesome and useful features."
+        f"<tg-emoji emoji-id=\"5364125616801073577\">✈️</tg-emoji> "
     )
 
 async def start(update, context):
     """Start command handler."""
     if update.effective_chat and update.effective_chat.type == "private" and update.effective_user:
-        from user_manager_mongo import mark_user_started_dm
+        from managers.user_manager_mongo import mark_user_started_dm
         mark_user_started_dm(update.effective_user.id)
+
+        # Log user start event to log channel
+        user = update.effective_user
+        username_str = f"@{user.username}" if user.username else "No Username"
+        log_text = (
+            f"🤖 <b>New User Started Bot</b>\n\n"
+            f"👤 <b>User:</b> {user.mention_html()}\n"
+            f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+            f"🏷 <b>Username:</b> {username_str}"
+        )
+        await log_to_channel(context, log_text)
 
     if context.args:
         arg = context.args[0]
@@ -91,7 +102,7 @@ async def start(update, context):
             try:
                 group_chat_id = int(arg.split('_')[1])
                 target_chat = await context.bot.get_chat(group_chat_id)
-                from welcome import send_welcome
+                from handlers.welcome import send_welcome
                 await send_welcome(target_chat, update.effective_user, context)
                 return
             except Exception as e:
@@ -99,7 +110,7 @@ async def start(update, context):
         elif arg.startswith('settings_'):
             group_chat_id = int(arg.split('_')[1])
             context.user_data['settings_chat_id'] = group_chat_id
-            from settings import show_settings_panel
+            from features.settings import show_settings_panel
             await show_settings_panel(update, context, group_chat_id, is_private=True)
             return
         elif arg.startswith('tz_'):
@@ -128,7 +139,9 @@ async def start(update, context):
     bot_info = await context.bot.get_me()
     bot_name = bot_info.first_name
     bot_username = bot_info.username
-    bot_mention = f"@{bot_username}" if bot_username else bot_name
+    bot_id = bot_info.id
+    escaped_bot_name = bot_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    bot_mention = f'<a href="tg://user?id={bot_id}">{escaped_bot_name}</a>'
     add_to_group_url = f"https://t.me/{bot_username}?startgroup=true"
 
     keyboard = _start_keyboard(add_to_group_url)
@@ -141,7 +154,8 @@ async def start(update, context):
         photo=photo_url,
         caption=start_message,
         reply_markup=keyboard,
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
+        has_spoiler=True
     )
 
 # Music World bots (label -> username link)
@@ -162,7 +176,7 @@ async def music_world_callback(update, context):
     await query.answer()
 
     if data == "help_open":
-        from help import get_help_keyboard
+        from features.help import get_help_keyboard
         text = ("📚 <b>Bot Help Menu</b>\n\n"
                 "Select a category below to see available commands and features.")
         try:
@@ -174,7 +188,8 @@ async def music_world_callback(update, context):
     if data == "music_back":
         bot_info = await context.bot.get_me()
         add_url = f"https://t.me/{bot_info.username}?startgroup=true"
-        bot_mention = f"@{bot_info.username}" if bot_info.username else bot_info.first_name
+        escaped_bot_name = (bot_info.first_name or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        bot_mention = f'<a href="tg://user?id={bot_info.id}">{escaped_bot_name}</a>'
         keyboard = _start_keyboard(add_url)
         caption = _start_caption(bot_mention, update.effective_user.mention_html())
         try:
@@ -218,7 +233,7 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     # Check command access
-    from settings_manager_mongo import check_command_access
+    from managers.settings_manager_mongo import check_command_access
     if not await check_command_access(chat_id, user_id, 'info', context):
         await send_bot_response(update, context, "You don't have permission to use the /info command.")
         return
@@ -234,7 +249,7 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             chat = await context.bot.get_chat(user_id)
             
-            from moderation_manager_mongo import is_channel_banned
+            from managers.moderation_manager_mongo import is_channel_banned
             banned = is_channel_banned(chat_id, user_id)
             channel_status = "Banned ⛔" if banned else "Active ✅"
             
@@ -429,7 +444,7 @@ async def groupdetail_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     try:
         # Get all chats from MongoDB database
-        from database import get_all_chats
+        from core.database import get_all_chats
         chats = get_all_chats()
         
         if not chats:
@@ -484,6 +499,87 @@ async def groupdetail_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logging.error(f"Error in groupdetail command: {e}")
         await send_bot_response(update, context, f"❌ Error fetching group details: {e}")
 
+async def ping_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show ping latency and bot statistics — bot owner only."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await send_bot_response(update, context, "❌ This command is only available to the bot owner.")
+        return
+
+    start_time = time.time()
+    msg = await update.message.reply_text("⚡ <i>Pinging server & gathering stats...</i>", parse_mode=ParseMode.HTML)
+    end_time = time.time()
+    
+    latency_ms = round((end_time - start_time) * 1000, 2)
+
+    # Uptime calculation
+    uptime_delta = datetime.datetime.now() - BOT_START_TIME
+    days = uptime_delta.days
+    hours, remainder = divmod(uptime_delta.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days > 0 else f"{hours}h {minutes}m {seconds}s"
+
+    # RAM & CPU Usage
+    try:
+        import psutil
+        process = psutil.Process()
+        ram_mb = round(process.memory_info().rss / (1024 * 1024), 2)
+        cpu_percent = psutil.cpu_percent(interval=None)
+    except Exception:
+        ram_mb = "N/A"
+        cpu_percent = "N/A"
+
+    # Database Stats
+    chats_count = 0
+    users_count = 0
+    db_status = "Disconnected ❌"
+    try:
+        from core.database import get_database, COLLECTIONS
+        db = get_database()
+        if db is not None:
+            db_start = time.time()
+            db.command('ping')
+            db_ping_ms = round((time.time() - db_start) * 1000, 2)
+            db_status = f"Connected ({db_ping_ms} ms) ✅"
+            
+            chats_count = db[COLLECTIONS["settings"]].count_documents({})
+            users_count = db[COLLECTIONS["users"]].count_documents({})
+    except Exception as e:
+        db_status = f"Error ({e}) ❌"
+
+    # Telethon Userbot Status
+    telethon_status = "Disabled ❌"
+    try:
+        from features.voice_chat import telethon_client
+        if telethon_client and telethon_client.is_connected():
+            telethon_status = "Connected ✅"
+        elif telethon_client:
+            telethon_status = "Disconnected ⚠️"
+    except Exception:
+        pass
+
+    import telegram
+    text = (
+        f"👑 <b><u>BOT OWNER PING & STATS</u></b>\n\n"
+        f"⚡ <b>Ping Latency:</b> <code>{latency_ms} ms</code>\n"
+        f"⏱ <b>Uptime:</b> <code>{uptime_str}</code>\n"
+        f"💾 <b>RAM Usage:</b> <code>{ram_mb} MB</code>\n"
+        f"🖥 <b>CPU Usage:</b> <code>{cpu_percent}%</code>\n\n"
+        f"📊 <b><u>DATABASE STATS</u></b>\n"
+        f"🌐 <b>MongoDB:</b> <code>{db_status}</code>\n"
+        f"👥 <b>Total Groups:</b> <code>{chats_count}</code>\n"
+        f"👤 <b>Total Users:</b> <code>{users_count}</code>\n\n"
+        f"🤖 <b><u>SYSTEM INFO</u></b>\n"
+        f"📱 <b>Telethon Userbot:</b> <code>{telethon_status}</code>\n"
+        f"🐍 <b>Python Version:</b> <code>{platform.python_version()}</code>\n"
+        f"📦 <b>PTB Version:</b> <code>{telegram.__version__}</code>"
+    )
+
+    try:
+        await msg.edit_text(text, parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
 async def info_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle management buttons from the /info command."""
     query = update.callback_query
@@ -516,9 +612,9 @@ async def info_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return
     
     # Import handlers locally to avoid circular imports
-    from moderation import mute_command, unmute_command, ban_command, warn_command, unwarn_command, unban_command, muter_command
-    from moderation_manager_mongo import get_user_warns, is_muter as check_is_muter, is_channel_banned
-    from admin import promote_user, demote_command, DEFAULT_PERMISSIONS, get_promotion_keyboard
+    from moderation.moderation import mute_command, unmute_command, ban_command, warn_command, unwarn_command, unban_command, muter_command
+    from managers.moderation_manager_mongo import get_user_warns, is_muter as check_is_muter, is_channel_banned
+    from moderation.admin import promote_user, demote_command, DEFAULT_PERMISSIONS, get_promotion_keyboard
     
     # Create a mock update to reuse existing command logic
     class MockMessage:
@@ -619,7 +715,7 @@ async def info_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return
     elif action == "doban":
         try:
-            from moderation_manager_mongo import add_banned_channel, remove_banned_channel
+            from managers.moderation_manager_mongo import add_banned_channel, remove_banned_channel
             # Check if target is a channel
             is_channel = str(user_id).startswith('-100')
             
@@ -731,7 +827,7 @@ async def info_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await info_callback_handler(update, context)
         return
     elif action == "tomuter":
-        from moderation import add_muter, remove_muter
+        from moderation.moderation import add_muter, remove_muter
         if check_is_muter(chat_id, user_id):
             remove_muter(chat_id, user_id)
             await query.answer("Muter role removed.")
@@ -862,7 +958,7 @@ async def info_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         # We need to delete the current menu first or just edit it back
         # Let's just edit it back to the original info text and main buttons
         # For simplicity, we can reuse the code from info_command
-        from user_manager_mongo import get_user_stats
+        from managers.user_manager_mongo import get_user_stats
         import html
         stats = get_user_stats(user_id)
         username = stats.get("username") if stats else None
@@ -930,7 +1026,7 @@ async def get_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     # Check command access
-    from settings_manager_mongo import check_command_access
+    from managers.settings_manager_mongo import check_command_access
     if not await check_command_access(chat_id, user_id, 'id', context):
         await send_bot_response(update, context, "You don't have permission to use the /id command.")
         return
@@ -987,7 +1083,7 @@ async def send_rules_message(bot, chat_id, target_chat_id, settings, user=None, 
     
     # Format placeholders if user and chat are provided
     if user and chat:
-        from welcome import format_welcome_message
+        from handlers.welcome import format_welcome_message
         text = format_welcome_message(text, user, chat)
         
     media = settings.get("rules_media")
@@ -1210,7 +1306,7 @@ def main():
 
     # Initialize MongoDB connection
     print("Connecting to MongoDB...")
-    from database import connect_to_mongodb, initialize_collections
+    from core.database import connect_to_mongodb, initialize_collections
     if not connect_to_mongodb():
         print("WARNING: Failed to connect to MongoDB. Bot will run with limited functionality.")
     else:
@@ -1237,7 +1333,7 @@ def main():
     application.add_error_handler(error_handler)
 
     # Add general handlers (Group 0)
-    from blocking_handler import handle_reaction_blocking
+    from handlers.blocking_handler import handle_reaction_blocking
     application.add_handler(MessageReactionHandler(handle_reaction_blocking), group=0)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
@@ -1252,6 +1348,7 @@ def main():
     application.add_handler(CommandHandler("info", info_command))
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("groupdetail", groupdetail_command))
+    application.add_handler(CommandHandler(["ping", "stats", "pingstats"], ping_stats_command))
     application.add_handler(MessageHandler(
         filters.Regex(r'^@admin(s)?\b') & filters.ChatType.GROUPS,
         handle_admin_mention
@@ -1261,7 +1358,7 @@ def main():
     application.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP), cache_user_handler), group=-1)
 
     # Add support for commands in channels
-    from moderation import ban_command, unban_command
+    from moderation.moderation import ban_command, unban_command
     application.add_handler(CommandHandler("ban", ban_command, filters=filters.ChatType.CHANNEL))
     application.add_handler(CommandHandler("unban", unban_command, filters=filters.ChatType.CHANNEL))
 
@@ -1274,7 +1371,7 @@ def main():
         application.add_handler(handler)
 
     # Add Sudo handlers (Group 0) — owner-only sudo management
-    from sudo import get_sudo_handlers
+    from moderation.sudo import get_sudo_handlers
     for handler in get_sudo_handlers():
         application.add_handler(handler)
 
@@ -1412,9 +1509,9 @@ def main():
     # Add startup hook to show zombie count
     async def startup_notification(bot):
         """Send startup notification with statistics."""
-        from config import log_to_channel, LOG_CHANNEL_ID
-        from Manager.zombie import get_total_blocked_count, get_total_zombies_count
-        from database import get_collection, COLLECTIONS
+        from core.config import log_to_channel, LOG_CHANNEL_ID
+        from managers.zombie import get_total_blocked_count, get_total_zombies_count
+        from core.database import get_collection, COLLECTIONS
         
         try:
             # Get database stats
