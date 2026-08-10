@@ -63,8 +63,8 @@ def _start_keyboard(add_to_group_url):
             InlineKeyboardButton(colored_button("𝗠𝘂𝘀𝗶𝗰 𝗪𝗼𝗿𝗹𝗱", "green"), callback_data="music_world")
         ],
         [
-            InlineKeyboardButton(colored_button(to_small_caps("「 Support 」"), "green"), url="https://t.me/jayden_clan"),
-            InlineKeyboardButton(colored_button(to_small_caps("「 Updates 」"), "green"), url="https://t.me/Tele_212_bots")
+            InlineKeyboardButton(colored_button(to_small_caps("「 Support 」"), "green"), url="https://t.me/titanic_network"),
+            InlineKeyboardButton(colored_button(to_small_caps("「 Updates 」"), "green"), url="https://t.me/Developer_World_Advay")
         ],
         [
             InlineKeyboardButton(colored_button(to_small_caps("「 Owner 」"), "green"), url=f"tg://user?id={OWNER_ID}")
