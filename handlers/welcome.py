@@ -328,13 +328,19 @@ async def send_welcome(chat, user, context: ContextTypes.DEFAULT_TYPE):
                         if not telethon_client.is_connected():
                             await telethon_client.connect()
                         from handlers.bio_handler import _resolve_user_entity
-                        user_entity = await _resolve_user_entity(telethon_client, user.id, chat_id=chat_id)
+                        # Telethon needs bare supergroup ID (strip -100 prefix used by PTB)
+                        tl_chat_id = int(str(chat_id).replace("-100", "")) if str(chat_id).startswith("-100") else chat_id
+                        logging.info(f"[USERBOT WELCOME] Resolving user {user.id} via chat {tl_chat_id}...")
+                        user_entity = await _resolve_user_entity(telethon_client, user.id, chat_id=tl_chat_id)
                         if user_entity:
+                            logging.info(f"[USERBOT WELCOME] Entity resolved: {user_entity}, sending DM...")
                             await telethon_client.send_message(user_entity, personal_welcome, parse_mode='html')
                             dm_sent = True
                             logging.info(f"✅ Sent personal DM welcome to user {user.id} via Telethon for joining chat {chat_id}")
+                        else:
+                            logging.warning(f"[USERBOT WELCOME] Could not resolve entity for user {user.id}")
                 except Exception as te:
-                    logging.error(f"Telethon DM welcome delivery failed for user {user.id}: {te}")
+                    logging.error(f"Telethon DM welcome delivery failed for user {user.id}: {te}", exc_info=True)
             else:
                 logging.debug(f"DM welcome payload skipped/failed for user {user.id}: {e}")
 
@@ -439,12 +445,18 @@ async def send_goodbye(chat, user, context: ContextTypes.DEFAULT_TYPE):
                     if not telethon_client.is_connected():
                         await telethon_client.connect()
                     from handlers.bio_handler import _resolve_user_entity
-                    user_entity = await _resolve_user_entity(telethon_client, user.id, chat_id=chat_id)
+                    # Telethon needs bare supergroup ID (strip -100 prefix used by PTB)
+                    tl_chat_id = int(str(chat_id).replace("-100", "")) if str(chat_id).startswith("-100") else chat_id
+                    logging.info(f"[USERBOT GOODBYE] Resolving user {user.id} via chat {tl_chat_id}...")
+                    user_entity = await _resolve_user_entity(telethon_client, user.id, chat_id=tl_chat_id)
                     if user_entity:
+                        logging.info(f"[USERBOT GOODBYE] Entity resolved: {user_entity}, sending DM...")
                         await telethon_client.send_message(user_entity, formatted_goodbye, parse_mode='html')
                         logging.info(f"✅ Sent goodbye DM to user {user.id} via Telethon for leaving chat {chat_id}")
+                    else:
+                        logging.warning(f"[USERBOT GOODBYE] Could not resolve entity for user {user.id}")
             except Exception as te:
-                logging.error(f"Telethon goodbye DM delivery failed for user {user.id}: {te}")
+                logging.error(f"Telethon goodbye DM delivery failed for user {user.id}: {te}", exc_info=True)
         else:
             logging.error(f"Error sending goodbye DM to user {user.id}: {e}")
 
