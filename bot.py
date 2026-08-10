@@ -38,6 +38,7 @@ from features.font_normalizer import normalize_text
 from features.recurring import get_recurring_handlers, check_recurring_messages, count_recurring_messages
 from managers import get_manager_handlers
 from features.tagger import get_tagger_handlers
+from features.doraemon_ai import get_doraemon_ai_handlers
 from core.config import BOT_TOKEN, LOG_CHANNEL_ID, OWNER_ID, log_to_channel, send_bot_response, send_bot_media, START_IMG, to_small_caps, colored_button
 from features.voice_chat import start_voice_chat_monitor, stop_voice_chat_monitor, get_voice_chat_handlers
 from managers.user_manager_mongo import cache_user_handler, get_user_id, get_user_stats, is_user_admin, get_sangmata_handlers
@@ -1364,6 +1365,10 @@ def main():
 
     # Add Voice Chat handlers (Group 0)
     for handler in get_voice_chat_handlers():
+        application.add_handler(handler)
+
+    # Add Doraemon AI Chatbot handlers
+    for handler in get_doraemon_ai_handlers():
         application.add_handler(handler)
 
     # Add Admin handlers (Group 0)
