@@ -1,12 +1,13 @@
 import datetime
 import logging
-from core.database import get_db
+from core.database import get_database, get_collection
 from core.redis_db import get_redis_client
 
 logger = logging.getLogger(__name__)
 
-db = get_db()
-chat_counts_col = db["chat_counts"] if db is not None else None
+def _get_chat_counts_col():
+    return get_collection("chat_counts")
+
 
 def _get_dates():
     now = datetime.datetime.utcnow()
@@ -36,7 +37,8 @@ def increment_user_count(chat_id: int, user_id: int, user_name: str, points: int
             logger.error(f"Redis increment error: {e}")
 
     # 2. Update MongoDB for permanent persistence
-    if chat_counts_col is not None:
+    col = _get_chat_counts_col()
+    if col is not None:
         try:
             filter_query = {
                 "chat_id": chat_id,
@@ -53,7 +55,7 @@ def increment_user_count(chat_id: int, user_id: int, user_name: str, points: int
                     "overall": points
                 }
             }
-            chat_counts_col.update_one(filter_query, update_query, upsert=True)
+            col.update_one(filter_query, update_query, upsert=True)
         except Exception as e:
             logger.error(f"MongoDB chat count increment error: {e}")
 
@@ -79,7 +81,6 @@ def get_top_chatters(chat_id: int, timeframe: str = "daily", limit: int = 10):
 
             data = r.hgetall(redis_key)
             if data:
-                # Retrieve user names map
                 names_map = r.hgetall(f"chatusers:{chat_id_str}") or {}
                 sorted_items = sorted(data.items(), key=lambda x: int(x[1]), reverse=True)[:limit]
                 for uid, count in sorted_items:
@@ -93,10 +94,11 @@ def get_top_chatters(chat_id: int, timeframe: str = "daily", limit: int = 10):
             logger.error(f"Redis fetch top chatters error: {e}")
 
     # Fallback to MongoDB
-    if chat_counts_col is not None:
+    col = _get_chat_counts_col()
+    if col is not None:
         try:
             field_name = f"daily.{daily_key}" if timeframe == "daily" else (f"weekly.{weekly_key}" if timeframe == "weekly" else "overall")
-            cursor = chat_counts_col.find(
+            cursor = col.find(
                 {"chat_id": chat_id, field_name: {"$gt": 0}},
                 {"user_name": 1, field_name: 1}
             ).sort(field_name, -1).limit(limit)
@@ -104,7 +106,6 @@ def get_top_chatters(chat_id: int, timeframe: str = "daily", limit: int = 10):
             for doc in cursor:
                 count_val = doc.get(field_name, 0)
                 if isinstance(count_val, dict):
-                    # In case nested field structure
                     count_val = count_val.get(daily_key if timeframe == "daily" else weekly_key, 0)
                 top_users.append({
                     "name": doc.get("user_name", "User"),
@@ -129,8 +130,9 @@ def reset_group_count(chat_id: int):
         except Exception as e:
             logger.error(f"Redis reset error: {e}")
 
-    if chat_counts_col is not None:
+    col = _get_chat_counts_col()
+    if col is not None:
         try:
-            chat_counts_col.delete_many({"chat_id": chat_id})
+            col.delete_many({"chat_id": chat_id})
         except Exception as e:
             logger.error(f"MongoDB reset error: {e}")
