@@ -9,3 +9,9 @@ timezonefinder
 python-dotenv
 certifi
 dnspython
+Pillow
+redis
+html2image
+opencv-python
+numpy
+
