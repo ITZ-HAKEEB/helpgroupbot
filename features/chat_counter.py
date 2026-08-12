@@ -14,7 +14,11 @@ async def chat_counter_listener(update: Update, context: ContextTypes.DEFAULT_TY
     Message handler to increment user chat count per group.
     Group isolated: chat.id is tracked independently.
     """
-    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+    if not update.effective_chat:
+        return
+
+    chat_type = str(update.effective_chat.type).lower()
+    if chat_type not in ["group", "supergroup"]:
         return
 
     user = update.effective_user
@@ -29,7 +33,7 @@ async def chat_counter_listener(update: Update, context: ContextTypes.DEFAULT_TY
     msg = update.effective_message
     points = 1
     if msg:
-        if msg.photo or msg.video or msg.document or msg.animation:
+        if msg.photo or msg.video or msg.document or msg.animation or msg.sticker:
             points = 2
         elif msg.voice or msg.audio or msg.video_note:
             points = 3
@@ -59,7 +63,11 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     Handler for /leaderboard, /top, and /chatcount commands.
     Generates and posts the graphical PNG leaderboard image.
     """
-    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+    if not update.effective_chat:
+        return
+
+    chat_type = str(update.effective_chat.type).lower()
+    if chat_type not in ["group", "supergroup"]:
         await update.effective_message.reply_text("❌ Leaderboard command can only be used inside group chats.")
         return
 
@@ -139,7 +147,11 @@ async def leaderboard_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def resetcount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command to reset chat counters for the group."""
-    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+    if not update.effective_chat:
+        return
+
+    chat_type = str(update.effective_chat.type).lower()
+    if chat_type not in ["group", "supergroup"]:
         await update.effective_message.reply_text("❌ Reset count command can only be used in group chats.")
         return
 
@@ -155,8 +167,8 @@ async def resetcount_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 def register_chat_counter_handlers(app):
     """Register message listeners, commands, and callback handlers."""
-    # Message listener for group chat count increments
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, chat_counter_listener), group=10)
+    # Message listener for group chat count increments (registers with filters.ALL & ~filters.COMMAND)
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, chat_counter_listener))
 
     # Leaderboard commands
     app.add_handler(CommandHandler(["leaderboard", "top", "chatcount"], leaderboard_command))

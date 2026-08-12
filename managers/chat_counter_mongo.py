@@ -100,16 +100,22 @@ def get_top_chatters(chat_id: int, timeframe: str = "daily", limit: int = 10):
             field_name = f"daily.{daily_key}" if timeframe == "daily" else (f"weekly.{weekly_key}" if timeframe == "weekly" else "overall")
             cursor = col.find(
                 {"chat_id": chat_id, field_name: {"$gt": 0}},
-                {"user_name": 1, field_name: 1}
+                {"user_name": 1, "daily": 1, "weekly": 1, "overall": 1}
             ).sort(field_name, -1).limit(limit)
 
             for doc in cursor:
-                count_val = doc.get(field_name, 0)
-                if isinstance(count_val, dict):
-                    count_val = count_val.get(daily_key if timeframe == "daily" else weekly_key, 0)
+                if timeframe == "daily":
+                    daily_dict = doc.get("daily") or {}
+                    count_val = daily_dict.get(daily_key, 0)
+                elif timeframe == "weekly":
+                    weekly_dict = doc.get("weekly") or {}
+                    count_val = weekly_dict.get(weekly_key, 0)
+                else:
+                    count_val = doc.get("overall", 0)
+
                 top_users.append({
                     "name": doc.get("user_name", "User"),
-                    "count": int(count_val)
+                    "count": int(count_val or 0)
                 })
         except Exception as e:
             logger.error(f"MongoDB fetch top chatters error: {e}")
