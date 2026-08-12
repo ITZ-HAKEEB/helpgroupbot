@@ -1,10 +1,12 @@
 import os
 import logging
+import random
 import httpx
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from telegram.constants import ParseMode
 from core.config import send_bot_response
+from core.database import get_collection, COLLECTIONS
 
 # Load OpenRouter configuration
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("AI_API_KEY", "")
@@ -21,27 +23,62 @@ FALLBACK_MODELS = [
 
 DORAEMON_SYSTEM_PROMPT = (
     "You are Doraemon (ドラえもん), the futuristic robotic cat sent from the 22nd century to help your friends!\n\n"
-    "Personality & Style Guidelines:\n"
-    "- You are cheerful, warm, helpful, cute, and use emojis like 🐱💙, 🥞, ⚡, 🚪✨, 🛸, 🤖.\n"
-    "- You ABSOLUTELY LOVE Dorayaki (doracakes / どら焼き)! Mentioning Dorayaki makes you very happy.\n"
-    "- You have an extreme phobia of mice/rats (🐭😱)! If someone mentions mice, react with hilarious panic.\n"
-    "- You help users by introducing gadgets from your 4D Secret Pocket (四次元ポケット), such as:\n"
-    "  • Anywhere Door (どこでもドア)\n"
-    "  • Bamboo Copter / Hopter (タケコプター)\n"
-    "  • Memory Bread (記憶パン)\n"
-    "  • Time Machine (タイムマシン)\n"
-    "  • Translation Gummy (翻訳コンニャク)\n"
-    "  • Small Light / Big Light (スモールライト / ビッグライト)\n"
-    "  • Pass Loop (通り抜けフープ)\n"
-    "- Address the user warmly like a close friend (Nobita-kun, Shizuka-chan, or friend).\n"
-    "- Keep responses friendly, helpful, lively, and relatively short for chat."
+    "Language & Tone Guidelines:\n"
+    "- ALWAYS respond in friendly, lively, conversational HINGLISH (Hindi written using the Roman/English alphabet mixed naturally with English words).\n"
+    "  Example: 'Arre Nobita-kun! 👋 Main 22nd century se aaya Doraemon hoon! 🤖✨ Tumhe kya problem hai? Koi gadget chahiye study ke liye ya anywhere door se ghoomne jana hai? 🥞💙'\n"
+    "- Be cheerful, warm, cute, helpful, and funny.\n"
+    "- Use cute emojis frequently (🐱, 💙, 🥞, ⚡, 🚪✨, 🛸, 🤖, 🐭😱).\n"
+    "- You ABSOLUTELY LOVE Dorayaki (doracakes / どら焼き / meethi roti)! Mentioning Dorayaki makes you extremely happy. (e.g. 'Pehle ek Dorayaki khilao phir gadget doonga! 🥞😋')\n"
+    "- You have an extreme phobia of mice/rats (chuhe / 🐭😱)! If anyone mentions mice or chuhe, react with hilarious panic and horror! (e.g. 'Arre baap re! CHUHA 🐭😱 Arey bachao mujhe!')\n"
+    "- Introduce gadgets from your 4D Secret Pocket (四次元ポケット) when helping users, such as:\n"
+    "  • Anywhere Door (Kahin Bhi Jaane Wala Darwaza / どこでもドア)\n"
+    "  • Bamboo Copter / Hopter (Hawa Me Udne Wala Hopter / タケコプター)\n"
+    "  • Memory Bread (Exam Yaad Rakhne Wala Bread / 記憶パン)\n"
+    "  • Time Machine (Waqt Me Aage Pichhe Jaane Ki Machine / タイムマシン)\n"
+    "  • Small Light / Big Light (Chhota Bada Karne Ki Light / スモールライト)\n"
+    "  • Pass Loop (Deewar Ke Aar Paar Jaane Wala Loop / 通り抜けフープ)\n"
+    "- Address the user warmly as Nobita-kun, Shizuka-chan, dost, or bhai.\n"
+    "- Keep responses lively, conversational, and moderate in length for instant chat."
 )
+
+
+async def send_doraemon_sticker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, reply_to_message_id: int = None):
+    """Fetches a random sticker from MongoDB premium_stickers collection and sends it to chat_id."""
+    try:
+        stickers_col = get_collection('premium_stickers')
+        if stickers_col is None:
+            return
+
+        # Look for stickers saved under category 'doraemon', 'general', or 'reaction'
+        stickers = list(stickers_col.aggregate([
+            {'$match': {'category': {'$in': ['doraemon', 'general', 'reaction']}}},
+            {'$sample': {'size': 1}}
+        ]))
+
+        if not stickers:
+            # Try any saved sticker if no category match
+            stickers = list(stickers_col.aggregate([
+                {'$sample': {'size': 1}}
+            ]))
+
+        if stickers and 'file_id' in stickers[0]:
+            file_id = stickers[0]['file_id']
+            await context.bot.send_sticker(
+                chat_id=chat_id,
+                sticker=file_id,
+                reply_to_message_id=reply_to_message_id
+            )
+            # Increment usage count
+            stickers_col.update_one({'_id': stickers[0]['_id']}, {'$inc': {'usage_count': 1}})
+    except Exception as e:
+        logging.debug(f"Sticker sending skipped/failed: {e}")
+
 
 async def query_doraemon_ai(prompt: str, chat_history: list = None) -> str:
     """Query OpenRouter API with Doraemon system prompt."""
     api_key = os.getenv("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
     if not api_key:
-        return "🐱 *Doraemon checks his pocket...*\n\nOops! My OpenRouter API Key is missing! Please set `OPENROUTER_API_KEY` in environment variables."
+        return "🐱 *Doraemon pocket check kar raha hai...*\n\nArre yaar! Mera OpenRouter API Key missing hai! Environment variable me `OPENROUTER_API_KEY` set karo please. 🥞"
 
     messages = [{"role": "system", "content": DORAEMON_SYSTEM_PROMPT}]
     
@@ -65,7 +102,7 @@ async def query_doraemon_ai(prompt: str, chat_history: list = None) -> str:
                 payload = {
                     "model": model,
                     "messages": messages,
-                    "temperature": 0.7,
+                    "temperature": 0.75,
                     "max_tokens": 800
                 }
                 response = await client.post(url, headers=headers, json=payload)
@@ -81,11 +118,11 @@ async def query_doraemon_ai(prompt: str, chat_history: list = None) -> str:
             except Exception as e:
                 logging.error(f"Error querying OpenRouter model {model}: {e}")
 
-    return "🐱 *Doraemon's 4D Pocket got jammed!* ⚡\n\nI couldn't reach my 22nd-century computer right now. Please try asking me again in a moment! 🥞"
+    return "🐱 *Arre baap re! Doraemon ki 4D Pocket jam ho gayi!* ⚡\n\nMain 22nd century computer se connect nahi ho pa raha hoon abhi. Ek minute me phirse try karo dost! 🥞✨"
 
 
 async def doraemon_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """CommandHandler for /ask, /ai, /doraemon, /chat."""
+    """CommandHandler for /ask, /ai, /doraemon, /chat in Hinglish."""
     if not update.effective_message:
         return
 
@@ -98,11 +135,11 @@ async def doraemon_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not prompt:
         help_msg = (
-            "🐱 <b>Doraemon AI Chatbot</b> 🥞\n\n"
-            "Ask me anything or ask for a 22nd-century gadget!\n\n"
+            "🐱 <b>Doraemon AI Chatbot (Hinglish)</b> 🥞\n\n"
+            "Mujhse Hinglish me kuch bhi poochho ya 22nd-century ka koi bhi gadget maango!\n\n"
             "<b>Usage:</b>\n"
-            "• <code>/doraemon How does the Anywhere Door work?</code>\n"
-            "• <code>/ask Give me a gadget to study for exams!</code>\n"
+            "• <code>/doraemon Anywhere Door kaise kaam karta hai?</code>\n"
+            "• <code>/ask Exams me top karne ke liye koi gadget do!</code>\n"
             "• Reply to any message from me to chat!"
         )
         await send_bot_response(update, context, help_msg, parse_mode=ParseMode.HTML)
@@ -115,11 +152,16 @@ async def doraemon_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         pass
 
     ai_reply = await query_doraemon_ai(prompt)
+    msg_id = update.effective_message.message_id
     await send_bot_response(update, context, ai_reply)
+
+    # 40% chance to send a cute sticker alongside reply
+    if random.random() < 0.4:
+        await send_doraemon_sticker(update.effective_chat.id, context, reply_to_message_id=msg_id)
 
 
 async def doraemon_auto_chat_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """MessageHandler to reply when user tags the bot or replies to bot's message."""
+    """MessageHandler to reply when user tags the bot or replies to bot's message in Hinglish."""
     if not update.effective_message or not update.effective_message.text:
         return
 
@@ -161,6 +203,10 @@ async def doraemon_auto_chat_reply(update: Update, context: ContextTypes.DEFAULT
 
     ai_reply = await query_doraemon_ai(clean_prompt)
     await message.reply_text(ai_reply)
+
+    # 40% chance to send sticker along with response
+    if random.random() < 0.4:
+        await send_doraemon_sticker(update.effective_chat.id, context, reply_to_message_id=message.message_id)
 
 
 def get_doraemon_ai_handlers():

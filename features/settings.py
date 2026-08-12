@@ -605,22 +605,30 @@ def get_goodbye_settings_keyboard(settings):
     return InlineKeyboardMarkup(keyboard)
 
 def get_join_request_settings_keyboard(settings):
+    is_enabled = settings.get("join_request_enabled", True)
     current_mode = settings.get("join_request_mode", "manual").lower()
-    mode_accept = current_mode == "accept"
-    mode_decline = current_mode == "decline"
-    mode_manual = current_mode == "manual"
+    mode_accept = is_enabled and current_mode == "accept"
+    mode_decline = is_enabled and current_mode == "decline"
+    mode_manual = is_enabled and current_mode == "manual"
+    mode_off = not is_enabled or current_mode == "off"
     
+    status_btn_text = f"Join Requests: {'✅ Enabled' if is_enabled else '❌ Disabled'}"
     accept_label = "✅ Auto-Accept" + (" ✓" if mode_accept else "")
     decline_label = "❌ Auto-Decline" + (" ✓" if mode_decline else "")
     manual_label = "⚙️ Manual Approval" + (" ✓" if mode_manual else "")
+    off_label = "🚫 Turn Off" + (" ✓" if mode_off else "")
     
     keyboard = [
+        [
+            InlineKeyboardButton(colored_button(status_btn_text, "blue"), callback_data="set_toggle_join_request_enabled")
+        ],
         [
             InlineKeyboardButton(colored_button(accept_label, "blue"), callback_data="set_joinreq_mode_accept"),
             InlineKeyboardButton(colored_button(decline_label, "blue"), callback_data="set_joinreq_mode_decline"),
         ],
         [
-            InlineKeyboardButton(colored_button(manual_label, "blue"), callback_data="set_joinreq_mode_manual")
+            InlineKeyboardButton(colored_button(manual_label, "blue"), callback_data="set_joinreq_mode_manual"),
+            InlineKeyboardButton(colored_button(off_label, "blue"), callback_data="set_joinreq_mode_off")
         ],
         [InlineKeyboardButton(colored_button("🔙 Back", "blue"), callback_data="set_view_main")]
     ]
@@ -1272,17 +1280,22 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "set_view_join_request":
         settings = get_chat_settings(chat_id)
+        is_enabled = settings.get("join_request_enabled", True)
         current_mode = settings.get("join_request_mode", "manual").lower()
-        mode_text = {"accept": "Auto-Accept", "decline": "Auto-Decline", "manual": "Manual Approval"}.get(current_mode, current_mode.upper())
+        mode_text = "OFF" if not is_enabled or current_mode == "off" else {"accept": "Auto-Accept", "decline": "Auto-Decline", "manual": "Manual Approval"}.get(current_mode, current_mode.upper())
+        status_str = "ENABLED" if is_enabled else "DISABLED"
         try:
             await edit_bot_response(
                 query, context,
                 f"📥 <b>Join Request Settings</b>\n\n"
+                f"Status: <b>{status_str}</b>\n"
                 f"Current Mode: <b>{mode_text}</b>\n\n"
                 f"Control how the bot handles join requests from users wanting to enter the group:\n"
+                f"• <b>Enable/Disable:</b> Toggle entire join request feature on or off.\n"
                 f"• <b>Auto-Accept:</b> Approves all requests automatically & sends welcome DM.\n"
                 f"• <b>Auto-Decline:</b> Rejects all join requests.\n"
-                f"• <b>Manual:</b> Shows Accept/Decline buttons in the group for admins.",
+                f"• <b>Manual:</b> Shows Accept/Decline buttons in the group for admins.\n"
+                f"• <b>Turn Off:</b> Ignores incoming join requests.",
                 reply_markup=get_join_request_settings_keyboard(settings),
                 parse_mode='HTML'
             )
@@ -1290,24 +1303,65 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
+    if data == "set_toggle_join_request_enabled":
+        if not await can_user_configure_settings(chat_id, user_id, context):
+            await query.answer("❌ Only group admins can change this setting.", show_alert=True)
+            return
+        settings = get_chat_settings(chat_id)
+        new_val = not settings.get("join_request_enabled", True)
+        update_chat_setting(chat_id, "join_request_enabled", new_val)
+        settings = get_chat_settings(chat_id)
+        current_mode = settings.get("join_request_mode", "manual").lower()
+        mode_text = "OFF" if not new_val or current_mode == "off" else {"accept": "Auto-Accept", "decline": "Auto-Decline", "manual": "Manual Approval"}.get(current_mode, current_mode.upper())
+        status_str = "ENABLED" if new_val else "DISABLED"
+        try:
+            await edit_bot_response(
+                query, context,
+                f"📥 <b>Join Request Settings</b>\n\n"
+                f"Status: <b>{status_str}</b>\n"
+                f"Current Mode: <b>{mode_text}</b>\n\n"
+                f"Control how the bot handles join requests from users wanting to enter the group:\n"
+                f"• <b>Enable/Disable:</b> Toggle entire join request feature on or off.\n"
+                f"• <b>Auto-Accept:</b> Approves all requests automatically & sends welcome DM.\n"
+                f"• <b>Auto-Decline:</b> Rejects all join requests.\n"
+                f"• <b>Manual:</b> Shows Accept/Decline buttons in the group for admins.\n"
+                f"• <b>Turn Off:</b> Ignores incoming join requests.",
+                reply_markup=get_join_request_settings_keyboard(settings),
+                parse_mode='HTML'
+            )
+        except BadRequest: pass
+        await query.answer(f"Join Request feature set to {status_str}!")
+        return
+
     if data.startswith("set_joinreq_mode_"):
         if not await can_user_configure_settings(chat_id, user_id, context):
             await query.answer("❌ Only group admins can change this setting.", show_alert=True)
             return
         new_mode = data.replace("set_joinreq_mode_", "")
-        if new_mode in ("accept", "decline", "manual"):
-            update_chat_setting(chat_id, "join_request_mode", new_mode)
-            mode_text = {"accept": "Auto-Accept", "decline": "Auto-Decline", "manual": "Manual Approval"}.get(new_mode, new_mode.upper())
+        if new_mode in ("accept", "decline", "manual", "off"):
+            if new_mode == "off":
+                update_chat_setting(chat_id, "join_request_enabled", False)
+                update_chat_setting(chat_id, "join_request_mode", "off")
+            else:
+                update_chat_setting(chat_id, "join_request_enabled", True)
+                update_chat_setting(chat_id, "join_request_mode", new_mode)
+
             settings = get_chat_settings(chat_id)
+            is_enabled = settings.get("join_request_enabled", True)
+            mode_text = "OFF" if not is_enabled or new_mode == "off" else {"accept": "Auto-Accept", "decline": "Auto-Decline", "manual": "Manual Approval"}.get(new_mode, new_mode.upper())
+            status_str = "ENABLED" if is_enabled else "DISABLED"
             try:
                 await edit_bot_response(
                     query, context,
                     f"📥 <b>Join Request Settings</b>\n\n"
+                    f"Status: <b>{status_str}</b>\n"
                     f"Current Mode: <b>{mode_text}</b>\n\n"
                     f"Control how the bot handles join requests from users wanting to enter the group:\n"
+                    f"• <b>Enable/Disable:</b> Toggle entire join request feature on or off.\n"
                     f"• <b>Auto-Accept:</b> Approves all requests automatically & sends welcome DM.\n"
                     f"• <b>Auto-Decline:</b> Rejects all join requests.\n"
-                    f"• <b>Manual:</b> Shows Accept/Decline buttons in the group for admins.",
+                    f"• <b>Manual:</b> Shows Accept/Decline buttons in the group for admins.\n"
+                    f"• <b>Turn Off:</b> Ignores incoming join requests.",
                     reply_markup=get_join_request_settings_keyboard(settings),
                     parse_mode='HTML'
                 )
