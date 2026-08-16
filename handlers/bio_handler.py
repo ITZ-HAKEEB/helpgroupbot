@@ -240,6 +240,12 @@ async def bio_link_message_handler(update: Update, context: ContextTypes.DEFAULT
         return
     # if target is "everyone", we don't return early
 
+    # Check if user is freed from bio link check via /free
+    user_perms = settings.get("user_permissions", {}).get(str(user_id), {})
+    if user_perms.get("block_bio_link", False):
+        logging.info(f"[BIO] User {user_id} is freed from bio link check in chat {chat_id}")
+        return
+
     # Run the check in the background to not block the main message loop
     async def run_background_check():
         try:

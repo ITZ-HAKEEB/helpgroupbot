@@ -692,6 +692,7 @@ async def free_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     blocking_labels = {
         "block_stickers": "🎫 Stickers",
         "block_premium_sticker": "✨ Premium",
+        "block_bio_link": "🔗 Bio Link",
     }
     
     if already_freed:
@@ -814,6 +815,7 @@ async def list_freed_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
     blocking_labels = {
         "block_stickers": "🎫",
         "block_premium_sticker": "✨",
+        "block_bio_link": "🔗",
     }
 
     from managers.user_manager_mongo import resolve_username
@@ -968,6 +970,7 @@ def get_user_permission_keyboard(chat_id, user_id, settings):
     blocking_options = [
         ("block_stickers", "🎫 Stickers"),
         ("block_premium_sticker", "✨ Premium"),
+        ("block_bio_link", "🔗 Bio Link"),
     ]
     
     keyboard = []
