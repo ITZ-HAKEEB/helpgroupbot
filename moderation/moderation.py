@@ -831,7 +831,116 @@ async def forceunmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         await send_bot_response(update, context, f"Error: {e}")
 
+async def _delete_user_messages(context, chat_id: int, user_id: int) -> bool:
+    """Delete all messages from a user in a chat using Bot API deleteUserMessages (Bot API 7.2+)."""
+    try:
+        from core.config import BOT_TOKEN
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/deleteUserMessages",
+                json={"chat_id": chat_id, "user_id": user_id}
+            )
+            result = resp.json()
+            if result.get("ok"):
+                logging.info(f"[DMUTE/DBAN] Deleted all messages of user {user_id} in chat {chat_id}")
+                return True
+            else:
+                logging.warning(f"[DMUTE/DBAN] deleteUserMessages failed: {result.get('description')}")
+                return False
+    except Exception as e:
+        logging.error(f"[DMUTE/DBAN] Error calling deleteUserMessages: {e}")
+        return False
+
+async def dmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mutes a user AND deletes all their messages in the chat."""
+    chat_id = update.effective_chat.id
+    sender_id = update.effective_user.id if update.effective_user else None
+
+    if not await can_user_mute(chat_id, sender_id, context):
+        await send_bot_response(update, context, "You must be an admin or have the 'Muter' role to use /dmute.")
+        return
+
+    has_rights, error_msg = await check_bot_admin_rights(chat_id, context, ['can_restrict_members', 'can_delete_messages'])
+    if not has_rights:
+        await send_bot_response(update, context, error_msg)
+        return
+
+    user_id, user_name = await get_user_id(update, context)
+    if not user_id:
+        await send_bot_response(update, context, "Usage: Reply to a user's message or provide /dmute <user_id|@username>")
+        return
+
+    if await is_user_admin(chat_id, user_id, context) and sender_id != OWNER_ID:
+        await send_bot_response(update, context, "❌ I cannot mute another administrator.")
+        return
+
+    try:
+        # Step 1: Mute the user
+        await context.bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=False))
+
+        # Step 2: Delete all their messages
+        deleted = await _delete_user_messages(context, chat_id, user_id)
+        del_status = "and all their messages were deleted 🗑️" if deleted else "(note: message deletion requires Bot API 7.2+)"
+
+        await send_bot_response(update, context, f"🔇🗑️ <b>{user_name}</b> has been muted {del_status}.", parse_mode=ParseMode.HTML)
+
+        admin_name = update.effective_user.first_name if update.effective_user else "Admin"
+        await log_to_channel(context, f"🔇🗑️ #DMUTE\nTarget: {user_name} ({user_id})\nAdmin: {admin_name}")
+
+        if sender_id:
+            increment_staff_stat(chat_id, sender_id, "mute")
+    except BadRequest as e:
+        await send_bot_response(update, context, f"Error: {e}")
+    except Exception as e:
+        await send_bot_response(update, context, f"Error: {e}")
+
+async def dban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bans a user AND deletes all their messages in the chat."""
+    chat_id = update.effective_chat.id
+    sender_id = update.effective_user.id if update.effective_user else None
+
+    can_ban, error_msg = await can_user_ban(chat_id, sender_id, context)
+    if not can_ban:
+        await send_bot_response(update, context, error_msg)
+        return
+
+    has_rights, error_msg = await check_bot_admin_rights(chat_id, context, ['can_restrict_members', 'can_delete_messages'])
+    if not has_rights:
+        await send_bot_response(update, context, error_msg)
+        return
+
+    user_id, user_name = await get_user_id(update, context)
+    if not user_id:
+        await send_bot_response(update, context, "Usage: Reply to a user's message or provide /dban <user_id|@username>")
+        return
+
+    if await is_user_admin(chat_id, user_id, context) and sender_id != OWNER_ID:
+        await send_bot_response(update, context, "❌ I cannot ban another administrator.")
+        return
+
+    try:
+        # Step 1: Delete all their messages first (while still a member so the API resolves them)
+        deleted = await _delete_user_messages(context, chat_id, user_id)
+
+        # Step 2: Ban the user
+        await context.bot.ban_chat_member(chat_id, user_id)
+
+        del_status = "and all their messages were deleted 🗑️" if deleted else "(note: message deletion requires Bot API 7.2+)"
+        await send_bot_response(update, context, f"🔨🗑️ <b>{user_name}</b> has been banned {del_status}.", parse_mode=ParseMode.HTML)
+
+        admin_name = update.effective_user.first_name if update.effective_user else "Admin"
+        await log_to_channel(context, f"🔨🗑️ #DBAN\nTarget: {user_name} ({user_id})\nAdmin: {admin_name}")
+
+        if sender_id:
+            increment_staff_stat(chat_id, sender_id, "ban")
+    except BadRequest as e:
+        await send_bot_response(update, context, f"Error: {e}")
+    except Exception as e:
+        await send_bot_response(update, context, f"Error: {e}")
+
 def get_moderation_handlers():
+
     return [
         CommandHandler("ban", ban_command),
         CommandHandler("forceban", forceban_command),
@@ -841,6 +950,8 @@ def get_moderation_handlers():
         CommandHandler("unban", unban_command),
         CommandHandler("mute", mute_command),
         CommandHandler("unmute", unmute_command),
+        CommandHandler("dmute", dmute_command),
+        CommandHandler("dban", dban_command),
         CommandHandler("muter", muter_command),
         CommandHandler("unmuter", unmuter_command),
         CommandHandler("warn", warn_command),
