@@ -350,7 +350,13 @@ async def check_recurring_messages(context: ContextTypes.DEFAULT_TYPE):
                     msg['last_sent_at'] = now.isoformat()
                     changed = True
                 except Exception as e:
-                    logging.error(f"Error sending recurring message to {chat_id}: {e}")
+                    err_str = str(e).lower()
+                    if "not enough rights" in err_str or "forbidden" in err_str or "chat not found" in err_str:
+                        logging.warning(f"Disabling recurring message in {chat_id} due to permission error: {e}")
+                        msg['active'] = False
+                        changed = True
+                    else:
+                        logging.error(f"Error sending recurring message to {chat_id}: {e}")
                     
         if changed:
             update_chat_setting(chat_id, "recurring_messages", recurring_messages)
