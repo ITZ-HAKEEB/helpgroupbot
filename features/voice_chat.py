@@ -12,7 +12,7 @@ from telethon.sessions import StringSession
 from core.config import colored_button
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatMemberBanned
 from telegram.constants import ParseMode
-import core.config
+import core.config as config
 from core.config import BOT_TOKEN, to_small_caps, LOG_CHANNEL_ID, log_to_channel
 from features.font import to_mono
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters, CommandHandler
