@@ -9,5 +9,4 @@ timezonefinder
 python-dotenv
 certifi
 dnspython
-
-
+Pillow

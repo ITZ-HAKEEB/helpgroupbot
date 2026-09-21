@@ -270,8 +270,9 @@ def get_main_settings_keyboard(chat_id):
             [InlineKeyboardButton(colored_button("🗑️ Del", "blue"), callback_data="set_view_deleting"),
              InlineKeyboardButton(colored_button("👥 Mgr", "blue"), callback_data="set_view_manager")],
             [InlineKeyboardButton(colored_button("🚨 Emergency", "blue"), callback_data="set_view_emergency"),
+             InlineKeyboardButton(colored_button("🛡️ Captcha", "blue"), callback_data="set_view_captcha")],
+            [InlineKeyboardButton(colored_button("🔞 NSFW", "blue"), callback_data="set_view_nsfw"),
              InlineKeyboardButton(colored_button("📋 Freed", "blue"), callback_data="free_list_members")],
-            [InlineKeyboardButton(colored_button("🔞 NSFW", "blue"), callback_data="set_view_nsfw")],
             [InlineKeyboardButton(colored_button("🎨 Layout: Small", "blue"), callback_data="set_toggle_ui_layout")],
             [InlineKeyboardButton(colored_button("❌ Close", "blue"), callback_data="set_close")]
         ]
@@ -300,7 +301,8 @@ def get_main_settings_keyboard(chat_id):
             [InlineKeyboardButton(colored_button("🗑️ Deleting Messages", "blue"), callback_data="set_view_deleting"),
              InlineKeyboardButton(colored_button("👥 Manager", "blue"), callback_data="set_view_manager")],
             [InlineKeyboardButton(colored_button("🚨 Emergency", "blue"), callback_data="set_view_emergency"),
-             InlineKeyboardButton(colored_button("🔞 NSFW Filter", "blue"), callback_data="set_view_nsfw")],
+             InlineKeyboardButton(colored_button("🛡️ Captcha", "blue"), callback_data="set_view_captcha")],
+            [InlineKeyboardButton(colored_button("🔞 NSFW Filter", "blue"), callback_data="set_view_nsfw")],
             [InlineKeyboardButton(colored_button("📋 Freed Members", "blue"), callback_data="free_list_members")],
             [InlineKeyboardButton(colored_button("🎨 Layout: Large", "blue"), callback_data="set_toggle_ui_layout")],
             [InlineKeyboardButton(colored_button("❌ Close Menu", "blue"), callback_data="set_close")]
@@ -576,6 +578,47 @@ def get_welcome_settings_keyboard(settings):
         ],
         [InlineKeyboardButton(colored_button("🔙 Back", "blue"), callback_data="set_view_main")]
     ])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_captcha_settings_keyboard(settings):
+    is_enabled = settings.get("captcha_enabled", False)
+    status_str = "✅ Enabled" if is_enabled else "❌ Disabled"
+    test_type = settings.get("captcha_type", "button").capitalize()
+    action = settings.get("captcha_action", "kick").capitalize()
+    timeout = settings.get("captcha_timeout", 120)
+
+    keyboard = [
+        [InlineKeyboardButton(colored_button(f"Captcha: {status_str}", "blue"), callback_data="set_toggle_captcha_enabled")],
+        [InlineKeyboardButton(colored_button(f"📝 Test Type: {test_type}", "blue"), callback_data="set_view_captcha_type")],
+        [InlineKeyboardButton(colored_button(f"⚡ Penalty: {action}", "blue"), callback_data="set_captcha_toggle_action")],
+        [
+            InlineKeyboardButton(colored_button("-30s", "blue"), callback_data="set_captcha_time_sub"),
+            InlineKeyboardButton(colored_button(f"⏳ Timeout: {timeout}s", "blue"), callback_data="set_none"),
+            InlineKeyboardButton(colored_button("+30s", "blue"), callback_data="set_captcha_time_add")
+        ],
+        [InlineKeyboardButton(colored_button("🔙 Back", "blue"), callback_data="set_view_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_captcha_test_type_keyboard(settings):
+    current = settings.get("captcha_type", "button").lower()
+    
+    simple_lbl = "• Simple" + (" ✅" if current == "simple" else "")
+    button_lbl = "• Button" + (" ✅" if current == "button" else "")
+    digits_lbl = "• Digits" + (" ✅" if current == "digits" else "")
+    image_lbl = "• Image" + (" ✅" if current == "image" else "")
+    
+    keyboard = [
+        [
+            InlineKeyboardButton(colored_button(simple_lbl, "blue"), callback_data="set_captcha_type_simple"),
+            InlineKeyboardButton(colored_button(button_lbl, "blue"), callback_data="set_captcha_type_button")
+        ],
+        [
+            InlineKeyboardButton(colored_button(digits_lbl, "blue"), callback_data="set_captcha_type_digits"),
+            InlineKeyboardButton(colored_button(image_lbl, "blue"), callback_data="set_captcha_type_image")
+        ],
+        [InlineKeyboardButton(colored_button("🔙 Back", "blue"), callback_data="set_view_captcha")]
+    ]
     return InlineKeyboardMarkup(keyboard)
 
 def get_welcome_button_manage_keyboard(idx):
@@ -1246,6 +1289,176 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "set_view_main":
         await show_settings_panel(query, context, chat_id)
         await query.answer()
+        return
+
+    if data == "set_view_captcha":
+        settings = get_chat_settings(chat_id)
+        is_enabled = settings.get("captcha_enabled", False)
+        status_str = "✅ Enabled" if is_enabled else "❌ Disabled"
+        test_type = settings.get("captcha_type", "button").capitalize()
+        action = settings.get("captcha_action", "kick").capitalize()
+        timeout = settings.get("captcha_timeout", 120)
+        text = (
+            f"🛡️ <b>Captcha Verification Configuration</b>\n\n"
+            f"Status: <b>{status_str}</b>\n"
+            f"Test Type: <b>{test_type}</b>\n"
+            f"Penalty on Failure: <b>{action}</b>\n"
+            f"Timeout: <b>{timeout}s</b>\n\n"
+            f"Newcomers must pass the verification test before being allowed to send messages in the group."
+        )
+        try:
+            await edit_bot_response(
+                query, context,
+                text,
+                reply_markup=get_captcha_settings_keyboard(settings),
+                parse_mode='HTML'
+            )
+        except BadRequest: pass
+        await query.answer()
+        return
+
+    if data == "set_toggle_captcha_enabled":
+        if not await can_user_configure_settings(chat_id, user_id, context):
+            await query.answer("❌ Only group admins can change this setting.", show_alert=True)
+            return
+        settings = get_chat_settings(chat_id)
+        new_val = not settings.get("captcha_enabled", False)
+        update_chat_setting(chat_id, "captcha_enabled", new_val)
+        settings = get_chat_settings(chat_id)
+        status_str = "✅ Enabled" if new_val else "❌ Disabled"
+        test_type = settings.get("captcha_type", "button").capitalize()
+        action = settings.get("captcha_action", "kick").capitalize()
+        timeout = settings.get("captcha_timeout", 120)
+        text = (
+            f"🛡️ <b>Captcha Verification Configuration</b>\n\n"
+            f"Status: <b>{status_str}</b>\n"
+            f"Test Type: <b>{test_type}</b>\n"
+            f"Penalty on Failure: <b>{action}</b>\n"
+            f"Timeout: <b>{timeout}s</b>\n\n"
+            f"Newcomers must pass the verification test before being allowed to send messages in the group."
+        )
+        try:
+            await edit_bot_response(
+                query, context,
+                text,
+                reply_markup=get_captcha_settings_keyboard(settings),
+                parse_mode='HTML'
+            )
+        except BadRequest: pass
+        await query.answer(f"Captcha verification is now {status_str}!")
+        return
+
+    if data == "set_view_captcha_type":
+        settings = get_chat_settings(chat_id)
+        text = (
+            "Please, select the test type for the newcomers:\n\n"
+            "• Simple — bot will ask to send anything to the chat\n"
+            "• Button — bot will ask to press a button\n"
+            "• Digits — bot will ask to solve a simple arithmetic operation\n"
+            "• Image — bot will ask to recognize characters on an image"
+        )
+        try:
+            await edit_bot_response(
+                query, context,
+                text,
+                reply_markup=get_captcha_test_type_keyboard(settings)
+            )
+        except BadRequest: pass
+        await query.answer()
+        return
+
+    if data.startswith("set_captcha_type_"):
+        if not await can_user_configure_settings(chat_id, user_id, context):
+            await query.answer("❌ Only group admins can change this setting.", show_alert=True)
+            return
+        chosen = data.replace("set_captcha_type_", "").lower()
+        if chosen in ("simple", "button", "digits", "image"):
+            update_chat_setting(chat_id, "captcha_type", chosen)
+        settings = get_chat_settings(chat_id)
+        text = (
+            "Please, select the test type for the newcomers:\n\n"
+            "• Simple — bot will ask to send anything to the chat\n"
+            "• Button — bot will ask to press a button\n"
+            "• Digits — bot will ask to solve a simple arithmetic operation\n"
+            "• Image — bot will ask to recognize characters on an image"
+        )
+        try:
+            await edit_bot_response(
+                query, context,
+                text,
+                reply_markup=get_captcha_test_type_keyboard(settings)
+            )
+        except BadRequest: pass
+        await query.answer(f"Selected test type: {chosen.capitalize()}!")
+        return
+
+    if data == "set_captcha_toggle_action":
+        if not await can_user_configure_settings(chat_id, user_id, context):
+            await query.answer("❌ Only group admins can change this setting.", show_alert=True)
+            return
+        settings = get_chat_settings(chat_id)
+        actions = ["kick", "mute", "ban"]
+        cur_action = settings.get("captcha_action", "kick").lower()
+        next_action = actions[(actions.index(cur_action) + 1) % len(actions)] if cur_action in actions else "kick"
+        update_chat_setting(chat_id, "captcha_action", next_action)
+        settings = get_chat_settings(chat_id)
+        is_enabled = settings.get("captcha_enabled", False)
+        status_str = "✅ Enabled" if is_enabled else "❌ Disabled"
+        test_type = settings.get("captcha_type", "button").capitalize()
+        action = next_action.capitalize()
+        timeout = settings.get("captcha_timeout", 120)
+        text = (
+            f"🛡️ <b>Captcha Verification Configuration</b>\n\n"
+            f"Status: <b>{status_str}</b>\n"
+            f"Test Type: <b>{test_type}</b>\n"
+            f"Penalty on Failure: <b>{action}</b>\n"
+            f"Timeout: <b>{timeout}s</b>\n\n"
+            f"Newcomers must pass the verification test before being allowed to send messages in the group."
+        )
+        try:
+            await edit_bot_response(
+                query, context,
+                text,
+                reply_markup=get_captcha_settings_keyboard(settings),
+                parse_mode='HTML'
+            )
+        except BadRequest: pass
+        await query.answer(f"Penalty action set to: {action}!")
+        return
+
+    if data in ("set_captcha_time_add", "set_captcha_time_sub"):
+        if not await can_user_configure_settings(chat_id, user_id, context):
+            await query.answer("❌ Only group admins can change this setting.", show_alert=True)
+            return
+        settings = get_chat_settings(chat_id)
+        cur_time = int(settings.get("captcha_timeout", 120))
+        if data == "set_captcha_time_add":
+            new_time = min(600, cur_time + 30)
+        else:
+            new_time = max(30, cur_time - 30)
+        update_chat_setting(chat_id, "captcha_timeout", new_time)
+        settings = get_chat_settings(chat_id)
+        is_enabled = settings.get("captcha_enabled", False)
+        status_str = "✅ Enabled" if is_enabled else "❌ Disabled"
+        test_type = settings.get("captcha_type", "button").capitalize()
+        action = settings.get("captcha_action", "kick").capitalize()
+        text = (
+            f"🛡️ <b>Captcha Verification Configuration</b>\n\n"
+            f"Status: <b>{status_str}</b>\n"
+            f"Test Type: <b>{test_type}</b>\n"
+            f"Penalty on Failure: <b>{action}</b>\n"
+            f"Timeout: <b>{new_time}s</b>\n\n"
+            f"Newcomers must pass the verification test before being allowed to send messages in the group."
+        )
+        try:
+            await edit_bot_response(
+                query, context,
+                text,
+                reply_markup=get_captcha_settings_keyboard(settings),
+                parse_mode='HTML'
+            )
+        except BadRequest: pass
+        await query.answer(f"Timeout set to {new_time}s")
         return
 
     if data == "set_view_welcome":

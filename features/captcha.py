@@ -1,0 +1,598 @@
+import io
+import random
+import string
+import time
+import logging
+from PIL import Image, ImageDraw, ImageFont
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, CommandHandler
+from telegram.error import BadRequest
+
+from core.config import colored_button
+from managers.settings_manager_mongo import get_chat_settings, update_chat_setting
+
+# In-memory tracking of pending newcomer captchas: key = (chat_id, user_id)
+PENDING_CAPTCHAS = {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Challenge Generators
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_digits_challenge():
+    """Generates a simple arithmetic problem and 4 options."""
+    a = random.randint(2, 19)
+    b = random.randint(2, 19)
+    op = random.choice(["+", "-"])
+    if op == "-":
+        if a < b:
+            a, b = b, a
+        correct = a - b
+    else:
+        correct = a + b
+        
+    question = f"{a} {op} {b}"
+    
+    # Generate 3 distinct wrong options close to correct
+    options = {correct}
+    deltas = [-3, -2, -1, 1, 2, 3, 4, -4, 5]
+    random.shuffle(deltas)
+    for d in deltas:
+        wrong = correct + d
+        if wrong >= 0 and wrong != correct:
+            options.add(wrong)
+        if len(options) == 4:
+            break
+            
+    # If still not 4, add randoms
+    while len(options) < 4:
+        wrong = random.randint(0, 40)
+        if wrong != correct:
+            options.add(wrong)
+            
+    opt_list = list(options)
+    random.shuffle(opt_list)
+    return question, str(correct), [str(o) for o in opt_list]
+
+
+def generate_image_challenge():
+    """Generates an image captcha using Pillow and 4 options."""
+    # 4 alphanumeric characters (excluding ambiguous chars like 0/O, 1/I/l)
+    chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    code = "".join(random.choices(chars, k=4))
+    
+    # Image dimensions
+    width, height = 220, 80
+    bg_color = (random.randint(235, 255), random.randint(235, 255), random.randint(235, 255))
+    image = Image.new("RGB", (width, height), bg_color)
+    draw = ImageDraw.Draw(image)
+    
+    # Draw subtle background noise lines
+    for _ in range(6):
+        x1 = random.randint(0, width)
+        y1 = random.randint(0, height)
+        x2 = random.randint(0, width)
+        y2 = random.randint(0, height)
+        line_color = (random.randint(140, 200), random.randint(140, 200), random.randint(140, 200))
+        draw.line([(x1, y1), (x2, y2)], fill=line_color, width=random.randint(1, 2))
+        
+    # Draw noise points
+    for _ in range(120):
+        px = random.randint(0, width)
+        py = random.randint(0, height)
+        dot_color = (random.randint(150, 210), random.randint(150, 210), random.randint(150, 210))
+        draw.point((px, py), fill=dot_color)
+        
+    # Draw characters
+    try:
+        font = ImageFont.load_default(size=34)
+    except:
+        font = ImageFont.load_default()
+        
+    x_offset = 25
+    for char in code:
+        char_color = (random.randint(20, 100), random.randint(20, 100), random.randint(20, 100))
+        y_offset = random.randint(16, 26)
+        draw.text((x_offset, y_offset), char, font=font, fill=char_color)
+        x_offset += random.randint(40, 48)
+        
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    
+    # Generate 3 realistic wrong choices
+    options = {code}
+    while len(options) < 4:
+        wrong_chars = list(code)
+        idx_to_change = random.randint(0, 3)
+        wrong_chars[idx_to_change] = random.choice([c for c in chars if c != code[idx_to_change]])
+        options.add("".join(wrong_chars))
+        
+    opt_list = list(options)
+    random.shuffle(opt_list)
+    return buf, code, opt_list
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Permissions Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+RESTRICTED_PERMISSIONS = ChatPermissions(
+    can_send_messages=False,
+    can_send_audios=False,
+    can_send_documents=False,
+    can_send_photos=False,
+    can_send_videos=False,
+    can_send_video_notes=False,
+    can_send_voice_notes=False,
+    can_send_polls=False,
+    can_send_other_messages=False,
+    can_add_web_page_previews=False,
+    can_change_info=False,
+    can_invite_users=False,
+    can_pin_messages=False,
+)
+
+SIMPLE_MODE_PERMISSIONS = ChatPermissions(
+    can_send_messages=True,
+    can_send_audios=False,
+    can_send_documents=False,
+    can_send_photos=False,
+    can_send_videos=False,
+    can_send_video_notes=False,
+    can_send_voice_notes=False,
+    can_send_polls=False,
+    can_send_other_messages=False,
+    can_add_web_page_previews=False,
+    can_change_info=False,
+    can_invite_users=False,
+    can_pin_messages=False,
+)
+
+UNRESTRICTED_PERMISSIONS = ChatPermissions(
+    can_send_messages=True,
+    can_send_audios=True,
+    can_send_documents=True,
+    can_send_photos=True,
+    can_send_videos=True,
+    can_send_video_notes=True,
+    can_send_voice_notes=True,
+    can_send_polls=True,
+    can_send_other_messages=True,
+    can_add_web_page_previews=True,
+    can_change_info=False,
+    can_invite_users=True,
+    can_pin_messages=False,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Verification Start & Timeout
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_TYPE):
+    """Initiates newcomer verification test according to chat settings."""
+    chat_id = chat.id
+    user_id = user.id
+    
+    if user.is_bot:
+        return
+        
+    settings = get_chat_settings(chat_id)
+    if not settings.get("captcha_enabled", False):
+        from handlers.welcome import send_welcome
+        await send_welcome(chat, user, context)
+        return
+
+    test_type = settings.get("captcha_type", "button").lower()
+    timeout = int(settings.get("captcha_timeout", 120))
+    action = settings.get("captcha_action", "kick").lower()
+    
+    # 1. Restrict user
+    try:
+        perms = SIMPLE_MODE_PERMISSIONS if test_type == "simple" else RESTRICTED_PERMISSIONS
+        await context.bot.restrict_chat_member(chat_id, user_id, permissions=perms)
+    except Exception as e:
+        logging.warning(f"Could not restrict user {user_id} in {chat_id} on join: {e}")
+
+    # Mention string
+    user_name = user.first_name or "Newcomer"
+    safe_name = user_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    mention = f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+    
+    msg = None
+    correct_ans = ""
+    
+    # 2. Build challenge prompt and keyboard
+    if test_type == "simple":
+        text = (
+            f"👋 Welcome {mention} to <b>{chat.title}</b>!\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please <b>send any message</b> in this chat within <b>{timeout}s</b> to verify that you are not a bot."
+        )
+        try:
+            msg = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logging.error(f"Error sending simple captcha prompt: {e}")
+
+    elif test_type == "digits":
+        q_str, correct_ans, opt_list = generate_digits_challenge()
+        text = (
+            f"👋 Welcome {mention} to <b>{chat.title}</b>!\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please solve this simple arithmetic operation within <b>{timeout}s</b>:\n\n"
+            f"👉 <b>{q_str} = ?</b>"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton(colored_button(opt_list[0], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[0]}"),
+                InlineKeyboardButton(colored_button(opt_list[1], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[1]}")
+            ],
+            [
+                InlineKeyboardButton(colored_button(opt_list[2], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[2]}"),
+                InlineKeyboardButton(colored_button(opt_list[3], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[3]}")
+            ]
+        ]
+        try:
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Error sending digits captcha prompt: {e}")
+
+    elif test_type == "image":
+        img_buf, correct_ans, opt_list = generate_image_challenge()
+        caption = (
+            f"👋 Welcome {mention} to <b>{chat.title}</b>!\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please recognize the characters on the image below within <b>{timeout}s</b>:"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton(colored_button(opt_list[0], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[0]}"),
+                InlineKeyboardButton(colored_button(opt_list[1], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[1]}")
+            ],
+            [
+                InlineKeyboardButton(colored_button(opt_list[2], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[2]}"),
+                InlineKeyboardButton(colored_button(opt_list[3], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[3]}")
+            ]
+        ]
+        try:
+            msg = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=img_buf,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Error sending image captcha prompt: {e}")
+
+    else:
+        # Default: "button"
+        test_type = "button"
+        text = (
+            f"👋 Welcome {mention} to <b>{chat.title}</b>!\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please press the verification button below within <b>{timeout}s</b> to confirm you are human."
+        )
+        keyboard = [
+            [InlineKeyboardButton(colored_button("✅ I'm not a bot", "green"), callback_data=f"cpt_btn_{user_id}")]
+        ]
+        try:
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Error sending button captcha prompt: {e}")
+
+    if not msg:
+        # Fallback if sending failed: restore permissions and send normal welcome
+        try:
+            await context.bot.restrict_chat_member(chat_id, user_id, permissions=UNRESTRICTED_PERMISSIONS)
+        except: pass
+        from handlers.welcome import send_welcome
+        await send_welcome(chat, user, context)
+        return
+
+    # 3. Schedule timeout job
+    job = None
+    if context.job_queue:
+        try:
+            job = context.job_queue.run_once(
+                captcha_timeout_job,
+                timeout,
+                data={"chat_id": chat_id, "user_id": user_id},
+                name=f"cpt_timeout_{chat_id}_{user_id}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to schedule captcha timeout job: {e}")
+
+    # 4. Save state
+    PENDING_CAPTCHAS[(chat_id, user_id)] = {
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "chat": chat,
+        "user": user,
+        "type": test_type,
+        "answer": correct_ans,
+        "attempts": 0,
+        "max_attempts": 2,
+        "message_id": msg.message_id,
+        "job": job,
+        "timeout": timeout,
+        "action": action,
+        "created_at": time.time()
+    }
+
+
+async def captcha_timeout_job(context: ContextTypes.DEFAULT_TYPE):
+    """Executed when newcomer verification time expires."""
+    data = context.job.data
+    chat_id = data.get("chat_id")
+    user_id = data.get("user_id")
+    
+    key = (chat_id, user_id)
+    state = PENDING_CAPTCHAS.pop(key, None)
+    if not state:
+        return
+        
+    await resolve_captcha_failure(chat_id, user_id, state, context, reason="timeout")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Success & Failure Handlers
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def resolve_captcha_success(chat_id, user_id, state, context: ContextTypes.DEFAULT_TYPE):
+    """Unmutes user, cleans up prompt, and sends the standard welcome message."""
+    # Cancel timeout job if active
+    job = state.get("job")
+    if job:
+        try:
+            job.schedule_removal()
+        except: pass
+
+    # 1. Restore permissions
+    try:
+        await context.bot.restrict_chat_member(chat_id, user_id, permissions=UNRESTRICTED_PERMISSIONS)
+    except Exception as e:
+        logging.warning(f"Could not restore permissions for user {user_id} in {chat_id}: {e}")
+
+    # 2. Delete captcha prompt message
+    msg_id = state.get("message_id")
+    if msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except: pass
+
+    # 3. Deliver normal welcome
+    chat = state.get("chat")
+    user = state.get("user")
+    if chat and user:
+        from handlers.welcome import send_welcome
+        await send_welcome(chat, user, context)
+
+
+async def resolve_captcha_failure(chat_id, user_id, state, context: ContextTypes.DEFAULT_TYPE, reason="timeout"):
+    """Applies configured penalty (kick/mute/ban) when user fails captcha or times out."""
+    job = state.get("job")
+    if job:
+        try:
+            job.schedule_removal()
+        except: pass
+
+    action = state.get("action", "kick")
+    user = state.get("user")
+    safe_name = (user.first_name if user else "User").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    mention = f'<a href="tg://user?id={user_id}">{safe_name}</a>' if user else f"User <code>{user_id}</code>"
+    
+    # 1. Apply penalty
+    action_text = "kicked"
+    try:
+        if action == "ban":
+            await context.bot.ban_chat_member(chat_id, user_id)
+            action_text = "banned"
+        elif action == "mute":
+            await context.bot.restrict_chat_member(chat_id, user_id, permissions=RESTRICTED_PERMISSIONS)
+            action_text = "permanently muted"
+        else:
+            # Kick (ban + unban allows them to rejoin later)
+            await context.bot.ban_chat_member(chat_id, user_id)
+            await context.bot.unban_chat_member(chat_id, user_id)
+            action_text = "kicked"
+    except Exception as e:
+        logging.error(f"Failed to execute captcha action {action} on user {user_id} in {chat_id}: {e}")
+
+    # 2. Delete challenge prompt
+    msg_id = state.get("message_id")
+    if msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except: pass
+
+    # 3. Send temporary notice into chat
+    try:
+        reason_str = "timed out" if reason == "timeout" else "failed the verification"
+        notice = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ {mention} {reason_str} and was <b>{action_text}</b>.",
+            parse_mode=ParseMode.HTML
+        )
+        if context.job_queue:
+            from core.config import delete_message_job
+            context.job_queue.run_once(delete_message_job, 15, data={"chat_id": chat_id, "message_id": notice.message_id})
+    except: pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Incoming Interaction Handlers
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def captcha_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles button-based verification clicks."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+        
+    data = query.data
+    clicker_id = query.from_user.id
+    chat_id = update.effective_chat.id
+    
+    # Check if this is a button captcha callback
+    if not data.startswith("cpt_btn_"):
+        return
+        
+    target_user_id = int(data.replace("cpt_btn_", ""))
+    
+    # Reject other users clicking someone else's captcha
+    if clicker_id != target_user_id:
+        await query.answer("❌ This verification button is not for you.", show_alert=True)
+        return
+        
+    key = (chat_id, target_user_id)
+    state = PENDING_CAPTCHAS.pop(key, None)
+    if not state:
+        await query.answer("⚠️ This verification has already expired or been completed.", show_alert=True)
+        try:
+            await query.message.delete()
+        except: pass
+        return
+        
+    await query.answer("✅ Verification successful! Welcome to the group.")
+    await resolve_captcha_success(chat_id, target_user_id, state, context)
+
+
+async def captcha_options_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles multiple-choice option clicks for digits and image captchas."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+        
+    data = query.data
+    clicker_id = query.from_user.id
+    chat_id = update.effective_chat.id
+    
+    if not data.startswith("cpt_ans_"):
+        return
+        
+    parts = data.split("_", 3)
+    if len(parts) < 4:
+        return
+        
+    target_user_id = int(parts[2])
+    selected_val = parts[3]
+    
+    if clicker_id != target_user_id:
+        await query.answer("❌ This verification option is not for you.", show_alert=True)
+        return
+        
+    key = (chat_id, target_user_id)
+    state = PENDING_CAPTCHAS.get(key)
+    if not state:
+        await query.answer("⚠️ This verification has already expired or been completed.", show_alert=True)
+        try:
+            await query.message.delete()
+        except: pass
+        return
+        
+    correct_val = state.get("answer")
+    if selected_val == correct_val:
+        PENDING_CAPTCHAS.pop(key, None)
+        await query.answer("✅ Correct answer! Verification successful.")
+        await resolve_captcha_success(chat_id, target_user_id, state, context)
+    else:
+        state["attempts"] += 1
+        if state["attempts"] >= state["max_attempts"]:
+            PENDING_CAPTCHAS.pop(key, None)
+            await query.answer("❌ Incorrect answer! Verification failed.", show_alert=True)
+            await resolve_captcha_failure(chat_id, target_user_id, state, context, reason="wrong_answer")
+        else:
+            remaining = state["max_attempts"] - state["attempts"]
+            await query.answer(f"❌ Incorrect answer! You have {remaining} attempt(s) remaining.", show_alert=True)
+
+
+async def captcha_simple_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles text message sent by newcomers in simple captcha mode."""
+    if not update.message or not update.effective_chat or not update.effective_user:
+        return
+        
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    
+    key = (chat_id, user_id)
+    state = PENDING_CAPTCHAS.get(key)
+    if not state or state.get("type") != "simple":
+        return
+        
+    # User has sent a message: verify immediately!
+    PENDING_CAPTCHAS.pop(key, None)
+    
+    # Delete the user's test message to keep chat clean
+    try:
+        await update.message.delete()
+    except: pass
+    
+    await resolve_captcha_success(chat_id, user_id, state, context)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin Command: /captcha
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def captcha_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Direct admin command to view and configure captcha settings."""
+    if not update.effective_chat or not update.effective_user:
+        return
+        
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("This command can only be used inside a group by admins.")
+        return
+        
+    from managers.user_manager_mongo import can_user_configure_settings
+    if not await can_user_configure_settings(chat_id, user_id, context):
+        await update.message.reply_text("❌ You must be a group administrator with Change Info and Ban rights to configure Captcha.")
+        return
+        
+    from features.settings import get_captcha_settings_keyboard
+    settings = get_chat_settings(chat_id)
+    is_enabled = settings.get("captcha_enabled", False)
+    test_type = settings.get("captcha_type", "button").capitalize()
+    action = settings.get("captcha_action", "kick").capitalize()
+    timeout = settings.get("captcha_timeout", 120)
+    
+    status_str = "✅ Enabled" if is_enabled else "❌ Disabled"
+    
+    text = (
+        f"🛡️ <b>Captcha Verification Configuration</b>\n\n"
+        f"Status: <b>{status_str}</b>\n"
+        f"Test Type: <b>{test_type}</b>\n"
+        f"Penalty on Failure: <b>{action}</b>\n"
+        f"Timeout: <b>{timeout}s</b>\n\n"
+        f"Newcomers must pass the verification test before being allowed to send messages in the group."
+    )
+    
+    await update.message.reply_text(
+        text,
+        reply_markup=get_captcha_settings_keyboard(settings),
+        parse_mode=ParseMode.HTML
+    )
+
+
+def get_captcha_handlers():
+    """Returns handlers for newcomer captcha verification."""
+    return [
+        CommandHandler("captcha", captcha_command),
+        CallbackQueryHandler(captcha_button_callback, pattern=r"^cpt_btn_"),
+        CallbackQueryHandler(captcha_options_callback, pattern=r"^cpt_ans_"),
+        MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, captcha_simple_message_handler),
+    ]

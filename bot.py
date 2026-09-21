@@ -23,6 +23,7 @@ from moderation.bot_protection import get_bot_protection_handlers
 from moderation.link_spam import get_link_spam_handlers
 from moderation.forward_protection import get_forward_protection_handlers
 from features.settings import get_settings_handlers
+from features.captcha import get_captcha_handlers
 from features.help import get_help_handlers
 from features.translator import get_translation_handlers
 from moderation.language_filter import get_language_handlers
@@ -1404,6 +1405,10 @@ def main():
     for handler in get_welcome_handlers():
         application.add_handler(handler)
 
+    # Add captcha handlers (Group 0)
+    for handler in get_captcha_handlers():
+        application.add_handler(handler)
+
     # Add block content handlers (Group 0)
     for handler in get_block_content_handlers():
         # The MessageHandler for block content check should be in its own group to run concurrently
@@ -1583,6 +1588,7 @@ def main():
             BotCommand("blockreaction", "Toggle reaction blocking (Admins only)"),
             BotCommand("free", "Exempt a user (Admins only)"),
             BotCommand("joinreq", "Manage group join requests (Admins only)"),
+            BotCommand("captcha", "Captcha verification settings (Admins only)"),
             BotCommand("doraemon", "Chat with Doraemon AI Assistant"),
         ]
         try:

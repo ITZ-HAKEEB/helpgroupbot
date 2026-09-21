@@ -462,13 +462,21 @@ async def send_goodbye(chat, user, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send welcome message when a new member joins via service message (fallback)."""
+    """Send welcome message or trigger captcha when a new member joins via service message (fallback)."""
     if not update.message or not update.message.new_chat_members:
         return
         
+    chat = update.effective_chat
+    settings = get_chat_settings(chat.id)
+    captcha_active = settings.get("captcha_enabled", False)
+    
     for member in update.message.new_chat_members:
         if member.is_bot: continue
-        await send_welcome(update.effective_chat, member, context)
+        if captcha_active:
+            from features.captcha import start_captcha_verification
+            await start_captcha_verification(chat, member, context)
+        else:
+            await send_welcome(chat, member, context)
 
 async def on_left_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send goodbye message when a member leaves via service message (fallback)."""
@@ -550,7 +558,11 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
                 logging.info(f"Skipping welcome for re-joining user {member.id} in {chat_id} as welcome_rejoin_enabled is False")
                 return
         
-        await send_welcome(update.effective_chat, member, context)
+        if settings.get("captcha_enabled", False):
+            from features.captcha import start_captcha_verification
+            await start_captcha_verification(update.effective_chat, member, context)
+        else:
+            await send_welcome(update.effective_chat, member, context)
 
     # Trigger goodbye if moving from active to inactive
     is_leaving = old_status in active_statuses and new_status in inactive_statuses

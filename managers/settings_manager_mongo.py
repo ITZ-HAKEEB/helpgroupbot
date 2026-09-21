@@ -83,6 +83,11 @@ DEFAULT_CHAT_SETTINGS = {
     "vc_safety_enabled": False,
     "vc_panic_mode_enabled": False,
     "tagger_enabled": True,
+    # Captcha verification settings
+    "captcha_enabled": False,
+    "captcha_type": "button", # "simple", "button", "digits", "image"
+    "captcha_timeout": 120,    # seconds before action
+    "captcha_action": "kick",  # "kick", "mute", "ban"
     # Recurring messages settings
     "recurring_messages": [
         {
