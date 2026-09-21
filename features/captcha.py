@@ -328,12 +328,179 @@ async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_T
         "job": job,
         "timeout": timeout,
         "action": action,
-        "created_at": time.time()
+        "created_at": time.time(),
+        "is_vc_join": False
+    }
+
+
+async def start_vc_captcha_verification(chat_id, user_id, user_entity, call_id, ptb_app):
+    """Initiates verification for users who join Voice Chat without joining the group."""
+    settings = get_chat_settings(chat_id)
+    if not settings.get("captcha_vc_enabled", False):
+        return
+
+    test_type = settings.get("captcha_type", "button").lower()
+    timeout = int(settings.get("captcha_timeout", 120))
+    action = settings.get("captcha_action", "kick").lower()
+
+    user_name = getattr(user_entity, 'first_name', "User") or "User"
+    safe_name = user_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    mention = f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+
+    chat_title = "the Voice Chat"
+    try:
+        chat_obj = await ptb_app.bot.get_chat(chat_id)
+        if chat_obj and chat_obj.title:
+            chat_title = chat_obj.title
+    except: pass
+
+    msg = None
+    correct_ans = ""
+
+    if test_type == "simple":
+        text = (
+            f"🎙️ <b>Voice Chat Verification</b>\n"
+            f"👋 Welcome {mention} to <b>{chat_title}</b>'s Voice Chat!\n\n"
+            f"⚠️ <i>You joined the Voice Chat without joining the group.</i>\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please <b>send any message</b> in this chat or click the button below within <b>{timeout}s</b> to verify:"
+        )
+        keyboard = [
+            [InlineKeyboardButton(colored_button("✅ I'm not a bot", "green"), callback_data=f"cpt_btn_{user_id}")]
+        ]
+        try:
+            msg = await ptb_app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Error sending simple VC captcha prompt: {e}")
+
+    elif test_type == "digits":
+        q_str, correct_ans, opt_list = generate_digits_challenge()
+        text = (
+            f"🎙️ <b>Voice Chat Verification</b>\n"
+            f"👋 Welcome {mention} to <b>{chat_title}</b>'s Voice Chat!\n\n"
+            f"⚠️ <i>You joined the Voice Chat without joining the group.</i>\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please solve this simple arithmetic operation within <b>{timeout}s</b> to verify:\n\n"
+            f"👉 <b>{q_str} = ?</b>"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton(colored_button(opt_list[0], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[0]}"),
+                InlineKeyboardButton(colored_button(opt_list[1], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[1]}")
+            ],
+            [
+                InlineKeyboardButton(colored_button(opt_list[2], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[2]}"),
+                InlineKeyboardButton(colored_button(opt_list[3], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[3]}")
+            ]
+        ]
+        try:
+            msg = await ptb_app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Error sending digits VC captcha prompt: {e}")
+
+    elif test_type == "image":
+        img_buf, correct_ans, opt_list = generate_image_challenge()
+        caption = (
+            f"🎙️ <b>Voice Chat Verification</b>\n"
+            f"👋 Welcome {mention} to <b>{chat_title}</b>'s Voice Chat!\n\n"
+            f"⚠️ <i>You joined the Voice Chat without joining the group.</i>\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please recognize the characters on the image below within <b>{timeout}s</b> to verify:"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton(colored_button(opt_list[0], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[0]}"),
+                InlineKeyboardButton(colored_button(opt_list[1], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[1]}")
+            ],
+            [
+                InlineKeyboardButton(colored_button(opt_list[2], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[2]}"),
+                InlineKeyboardButton(colored_button(opt_list[3], "blue"), callback_data=f"cpt_ans_{user_id}_{opt_list[3]}")
+            ]
+        ]
+        try:
+            msg = await ptb_app.bot.send_photo(
+                chat_id=chat_id,
+                photo=img_buf,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Error sending image VC captcha prompt: {e}")
+
+    else:
+        test_type = "button"
+        text = (
+            f"🎙️ <b>Voice Chat Verification</b>\n"
+            f"👋 Welcome {mention} to <b>{chat_title}</b>'s Voice Chat!\n\n"
+            f"⚠️ <i>You joined the Voice Chat without joining the group.</i>\n\n"
+            f"🛡️ <b>Anti-Bot Verification</b>\n"
+            f"Please press the verification button below within <b>{timeout}s</b> to verify you are human:"
+        )
+        keyboard = [
+            [InlineKeyboardButton(colored_button("✅ I'm not a bot", "green"), callback_data=f"cpt_btn_{user_id}")]
+        ]
+        try:
+            msg = await ptb_app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Error sending button VC captcha prompt: {e}")
+
+    if not msg:
+        # Fallback: unmute user in VC if prompt couldn't be sent
+        try:
+            from features.voice_chat import mute_vc_participant
+            await mute_vc_participant(chat_id, user_id, muted=False)
+        except: pass
+        return
+
+    job = None
+    if ptb_app.job_queue:
+        try:
+            job = ptb_app.job_queue.run_once(
+                captcha_timeout_job,
+                timeout,
+                data={"chat_id": chat_id, "user_id": user_id},
+                name=f"cpt_timeout_{chat_id}_{user_id}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to schedule VC captcha timeout job: {e}")
+
+    PENDING_CAPTCHAS[(chat_id, user_id)] = {
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "chat": None,
+        "user": user_entity,
+        "type": test_type,
+        "answer": correct_ans,
+        "attempts": 0,
+        "max_attempts": 2,
+        "message_id": msg.message_id,
+        "job": job,
+        "timeout": timeout,
+        "action": action,
+        "created_at": time.time(),
+        "is_vc_join": True,
+        "call_id": call_id
     }
 
 
 async def captcha_timeout_job(context: ContextTypes.DEFAULT_TYPE):
-    """Executed when newcomer verification time expires."""
+    """Executed when verification time expires."""
     data = context.job.data
     chat_id = data.get("chat_id")
     user_id = data.get("user_id")
@@ -351,7 +518,7 @@ async def captcha_timeout_job(context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def resolve_captcha_success(chat_id, user_id, state, context: ContextTypes.DEFAULT_TYPE):
-    """Unmutes user, cleans up prompt, and sends the standard welcome message."""
+    """Unmutes user, cleans up prompt, and sends the welcome message."""
     # Cancel timeout job if active
     job = state.get("job")
     if job:
@@ -359,20 +526,45 @@ async def resolve_captcha_success(chat_id, user_id, state, context: ContextTypes
             job.schedule_removal()
         except: pass
 
-    # 1. Restore permissions
-    try:
-        await context.bot.restrict_chat_member(chat_id, user_id, permissions=UNRESTRICTED_PERMISSIONS)
-    except Exception as e:
-        logging.warning(f"Could not restore permissions for user {user_id} in {chat_id}: {e}")
-
-    # 2. Delete captcha prompt message
+    # Delete captcha prompt message
     msg_id = state.get("message_id")
     if msg_id:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except: pass
 
-    # 3. Deliver normal welcome
+    is_vc_join = state.get("is_vc_join", False)
+    if is_vc_join:
+        # 1. Unmute in VC
+        try:
+            from features.voice_chat import mute_vc_participant
+            await mute_vc_participant(chat_id, user_id, muted=False)
+        except Exception as e:
+            logging.warning(f"Could not unmute user {user_id} in VC: {e}")
+
+        # 2. Send temporary success notice into chat
+        user = state.get("user")
+        name = getattr(user, 'first_name', "User") or "User"
+        safe_name = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        mention = f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+        try:
+            succ_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ {mention} has verified successfully and is unmuted in <b>Voice Chat</b>!",
+                parse_mode=ParseMode.HTML
+            )
+            if context.job_queue:
+                from core.config import delete_message_job
+                context.job_queue.run_once(delete_message_job, 15, data={"chat_id": chat_id, "message_id": succ_msg.message_id})
+        except: pass
+        return
+
+    # Standard group join success flow:
+    try:
+        await context.bot.restrict_chat_member(chat_id, user_id, permissions=UNRESTRICTED_PERMISSIONS)
+    except Exception as e:
+        logging.warning(f"Could not restore permissions for user {user_id} in {chat_id}: {e}")
+
     chat = state.get("chat")
     user = state.get("user")
     if chat and user:
@@ -390,10 +582,41 @@ async def resolve_captcha_failure(chat_id, user_id, state, context: ContextTypes
 
     action = state.get("action", "kick")
     user = state.get("user")
-    safe_name = (user.first_name if user else "User").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    mention = f'<a href="tg://user?id={user_id}">{safe_name}</a>' if user else f"User <code>{user_id}</code>"
-    
-    # 1. Apply penalty
+    user_name = getattr(user, 'first_name', "User") or "User"
+    safe_name = user_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    mention = f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+
+    # Delete challenge prompt
+    msg_id = state.get("message_id")
+    if msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except: pass
+
+    is_vc_join = state.get("is_vc_join", False)
+    if is_vc_join:
+        # Kick / remove user from VC
+        try:
+            from features.voice_chat import kick_user_from_vc
+            await kick_user_from_vc(chat_id, user_id, context=context, action=action)
+        except Exception as e:
+            logging.error(f"Failed to kick user {user_id} from VC: {e}")
+
+        try:
+            reason_str = "timed out" if reason == "timeout" else "failed verification"
+            action_text = "banned" if action == "ban" else "removed from Voice Chat"
+            notice = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ {mention} {reason_str} and was <b>{action_text}</b>.",
+                parse_mode=ParseMode.HTML
+            )
+            if context.job_queue:
+                from core.config import delete_message_job
+                context.job_queue.run_once(delete_message_job, 15, data={"chat_id": chat_id, "message_id": notice.message_id})
+        except: pass
+        return
+
+    # Standard group join failure flow:
     action_text = "kicked"
     try:
         if action == "ban":
@@ -403,21 +626,13 @@ async def resolve_captcha_failure(chat_id, user_id, state, context: ContextTypes
             await context.bot.restrict_chat_member(chat_id, user_id, permissions=RESTRICTED_PERMISSIONS)
             action_text = "permanently muted"
         else:
-            # Kick (ban + unban allows them to rejoin later)
             await context.bot.ban_chat_member(chat_id, user_id)
             await context.bot.unban_chat_member(chat_id, user_id)
             action_text = "kicked"
     except Exception as e:
         logging.error(f"Failed to execute captcha action {action} on user {user_id} in {chat_id}: {e}")
 
-    # 2. Delete challenge prompt
-    msg_id = state.get("message_id")
-    if msg_id:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except: pass
-
-    # 3. Send temporary notice into chat
+    # Send temporary notice into chat
     try:
         reason_str = "timed out" if reason == "timeout" else "failed the verification"
         notice = await context.bot.send_message(
@@ -571,14 +786,17 @@ async def captcha_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timeout = settings.get("captcha_timeout", 120)
     
     status_str = "✅ Enabled" if is_enabled else "❌ Disabled"
+    vc_enabled = settings.get("captcha_vc_enabled", False)
+    vc_status_str = "✅ Enabled" if vc_enabled else "❌ Disabled"
     
     text = (
         f"🛡️ <b>Captcha Verification Configuration</b>\n\n"
-        f"Status: <b>{status_str}</b>\n"
+        f"Group Join Captcha: <b>{status_str}</b>\n"
+        f"VC Join Captcha: <b>{vc_status_str}</b>\n"
         f"Test Type: <b>{test_type}</b>\n"
         f"Penalty on Failure: <b>{action}</b>\n"
         f"Timeout: <b>{timeout}s</b>\n\n"
-        f"Newcomers must pass the verification test before being allowed to send messages in the group."
+        f"Newcomers must pass the verification test when joining the group or Voice Chat."
     )
     
     await update.message.reply_text(

@@ -629,6 +629,41 @@ async def _process_single_participant(call_id, participant, chat_entity, is_join
 
             # 4. Check Settings
             settings = get_chat_settings(settings_chat_id)
+
+            # VC Captcha Check for users who join VC without joining the group
+            if is_join and settings.get("captcha_vc_enabled", False):
+                try:
+                    is_admin = await is_user_admin(settings_chat_id, user_id, ptb_application)
+                except:
+                    is_admin = False
+
+                if not is_admin:
+                    # Check if user has joined the group
+                    is_group_member = False
+                    try:
+                        cm = await ptb_application.bot.get_chat_member(chat_id=settings_chat_id, user_id=user_id)
+                        if cm and cm.status in ['member', 'administrator', 'creator', 'restricted']:
+                            is_group_member = True
+                    except Exception:
+                        is_group_member = False
+
+                    if not is_group_member:
+                        logger.info(f"🛡️ Triggering VC Captcha for user {user_id} in chat {settings_chat_id} (joined VC without group join)")
+                        # Mute in VC immediately
+                        await mute_vc_participant(settings_chat_id, user_id, muted=True)
+
+                        # Trigger VC captcha challenge
+                        from features.captcha import start_vc_captcha_verification
+                        asyncio.create_task(start_vc_captcha_verification(
+                            chat_id=settings_chat_id,
+                            user_id=user_id,
+                            user_entity=entity,
+                            call_id=call_id,
+                            ptb_app=ptb_application
+                        ))
+                        # Suppress regular join notification while verification is pending
+                        return
+
             if is_join and not settings.get("vc_user_join_enabled", True):
                 logger.info(f"🔇 [STOP] Join notifs disabled in {settings_chat_id}")
                 return
@@ -1015,16 +1050,12 @@ async def clean_ghost_participants(chat_id):
         logger.error(f"Error in clean_ghost_participants: {e}")
         return False, f"Error: {str(e)}"
 
-async def remove_user_from_vc(chat_id, user_id):
-    """Forcefully removes a specific user from the voice chat."""
+async def mute_vc_participant(chat_id, user_id, muted=True):
+    """Mutes or unmutes a specific user in the voice chat via Telethon."""
     if not telethon_client or not telethon_client.is_connected():
         return False
-        
     try:
-        # Normalize chat_id for Telethon
         tele_chat_id = int(str(chat_id).replace('-100', ''))
-        
-        # Get full chat/channel info to find the call
         if str(chat_id).startswith('-100'):
             full = await telethon_client(GetFullChannelRequest(channel=tele_chat_id))
         else:
@@ -1034,18 +1065,43 @@ async def remove_user_from_vc(chat_id, user_id):
             return False
             
         call = full.full_chat.call
-        
-        # Try to remove the user
+        try:
+            peer = await telethon_client.get_input_entity(int(user_id))
+        except:
+            peer = PeerUser(user_id=int(user_id))
+            
         await telethon_client(EditGroupCallParticipantRequest(
             call=call,
-            participant=PeerUser(user_id=int(user_id)),
-            left=True
+            participant=peer,
+            muted=muted
         ))
-        logger.info(f"✅ User {user_id} removed from VC in chat {chat_id}")
+        logger.info(f"🎙 User {user_id} set muted={muted} in VC for chat {chat_id}")
         return True
     except Exception as e:
-        logger.warning(f"Failed to remove user {user_id} from VC: {e}")
+        logger.warning(f"Failed to set muted={muted} for user {user_id} in VC: {e}")
         return False
+
+async def kick_user_from_vc(chat_id, user_id, context=None, action="kick"):
+    """Forcefully removes a user from VC by muting in VC and ejecting via Bot API."""
+    # First mute in VC
+    await mute_vc_participant(chat_id, user_id, muted=True)
+    # Eject from chat/VC via Bot API
+    bot = context.bot if context else (ptb_application.bot if ptb_application else None)
+    if bot:
+        try:
+            await bot.ban_chat_member(chat_id, int(user_id))
+            if action != "ban":
+                await bot.unban_chat_member(chat_id, int(user_id))
+            logger.info(f"✅ User {user_id} kicked from VC in chat {chat_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to kick user {user_id} from chat/VC {chat_id}: {e}")
+            return False
+    return False
+
+async def remove_user_from_vc(chat_id, user_id):
+    """Forcefully removes a specific user from the voice chat."""
+    return await kick_user_from_vc(chat_id, user_id, action="kick")
 
 async def vcclean_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command to clean ghost participants."""
