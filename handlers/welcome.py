@@ -469,12 +469,18 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     settings = get_chat_settings(chat.id)
     captcha_active = settings.get("captcha_enabled", False)
+    actor = update.message.from_user
     
     for member in update.message.new_chat_members:
         if member.is_bot: continue
         try:
             from managers.user_manager_mongo import is_user_admin
             if await is_user_admin(chat.id, member.id, context):
+                continue
+            # If newcomer was added by a group admin, bypass captcha!
+            if actor and actor.id != member.id and await is_user_admin(chat.id, actor.id, context):
+                logging.info(f"User {member.id} was added by admin {actor.id} in chat {chat.id}, bypassing captcha.")
+                await send_welcome(chat, member, context)
                 continue
         except: pass
         if captcha_active:
@@ -574,7 +580,19 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
                 return
         except: pass
 
-        # Captcha verification: ALWAYS triggers every time a member joins or re-joins!
+        # If newcomer was added by an admin of the group, bypass captcha!
+        actor = result.from_user
+        if actor and actor.id != member.id:
+            try:
+                from managers.user_manager_mongo import is_user_admin
+                if await is_user_admin(chat_id, actor.id, context):
+                    logging.info(f"User {member.id} was added by admin {actor.id} in chat {chat_id}, bypassing captcha.")
+                    await send_welcome(update.effective_chat, member, context)
+                    return
+            except Exception as e:
+                logging.warning(f"Error checking if actor is admin: {e}")
+
+        # Captcha verification: ALWAYS triggers every time a member joins or re-joins on their own!
         if settings.get("captcha_enabled", False):
             from features.captcha import start_captcha_verification
             await start_captcha_verification(update.effective_chat, member, context)

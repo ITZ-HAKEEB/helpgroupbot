@@ -59,6 +59,9 @@ vc_flood_counter = {} # chat_id -> (count, timestamp)
 # Pending invites: (chat_id, user_id) -> list of message_ids to delete upon join
 pending_invites = {}
 
+# Users invited to VC by group admins: chat_id -> set(user_id)
+admin_vc_invites = defaultdict(set)
+
 # Timestamp when the monitor started — ignore UpdateGroupCallParticipants for first 15s
 _vc_monitor_start_ts = None
 
@@ -648,21 +651,25 @@ async def _process_single_participant(call_id, participant, chat_entity, is_join
                         is_group_member = False
 
                     if not is_group_member:
-                        logger.info(f"🛡️ Triggering VC Captcha for user {user_id} in chat {settings_chat_id} (joined VC without group join)")
-                        # Mute in VC immediately
-                        await mute_vc_participant(settings_chat_id, user_id, muted=True)
+                        # Check if user was invited to VC by a group admin
+                        if user_id in admin_vc_invites.get(settings_chat_id, set()):
+                            logger.info(f"User {user_id} was invited to VC by an admin in {settings_chat_id}, bypassing VC captcha.")
+                        else:
+                            logger.info(f"🛡️ Triggering VC Captcha for user {user_id} in chat {settings_chat_id} (joined VC without group join)")
+                            # Mute in VC immediately
+                            await mute_vc_participant(settings_chat_id, user_id, muted=True)
 
-                        # Trigger VC captcha challenge
-                        from features.captcha import start_vc_captcha_verification
-                        asyncio.create_task(start_vc_captcha_verification(
-                            chat_id=settings_chat_id,
-                            user_id=user_id,
-                            user_entity=entity,
-                            call_id=call_id,
-                            ptb_app=ptb_application
-                        ))
-                        # Suppress regular join notification while verification is pending
-                        return
+                            # Trigger VC captcha challenge
+                            from features.captcha import start_vc_captcha_verification
+                            asyncio.create_task(start_vc_captcha_verification(
+                                chat_id=settings_chat_id,
+                                user_id=user_id,
+                                user_entity=entity,
+                                call_id=call_id,
+                                ptb_app=ptb_application
+                            ))
+                            # Suppress regular join notification while verification is pending
+                            return
 
             if is_join and not settings.get("vc_user_join_enabled", True):
                 logger.info(f"🔇 [STOP] Join notifs disabled in {settings_chat_id}")
@@ -888,6 +895,16 @@ async def voice_chat_invite_handler(update: Update, context: ContextTypes.DEFAUL
     invited_users = update.message.video_chat_participants_invited.users
     
     logger.info(f"Processing {len(invited_users)} invited users")
+
+    # If inviter is an admin, remember invited users to bypass VC captcha
+    if inviter:
+        try:
+            if await is_user_admin(chat_id, inviter.id, context):
+                for u in invited_users:
+                    admin_vc_invites[chat_id].add(u.id)
+                logger.info(f"Admin {inviter.id} invited {len(invited_users)} users to VC in {chat_id}, whitelisting from VC captcha.")
+        except Exception as e:
+            logger.warning(f"Error checking if VC inviter is admin: {e}")
     
     # Static parts in mono
     invited_mono = to_mono("invited")

@@ -187,7 +187,7 @@ def cancel_pending_captcha(chat_id, user_id, context=None):
             except: pass
 
 
-async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_TYPE):
+async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_TYPE, added_by=None):
     """Initiates newcomer verification test according to chat settings."""
     chat_id = chat.id
     user_id = user.id
@@ -200,6 +200,18 @@ async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_T
         from handlers.welcome import send_welcome
         await send_welcome(chat, user, context)
         return
+
+    # If the user was added by an admin of the group, bypass captcha!
+    if added_by and getattr(added_by, 'id', None) != user_id:
+        try:
+            from managers.user_manager_mongo import is_user_admin
+            if await is_user_admin(chat_id, added_by.id, context):
+                logging.info(f"User {user_id} was added by admin {added_by.id} in chat {chat_id}, bypassing captcha.")
+                from handlers.welcome import send_welcome
+                await send_welcome(chat, user, context)
+                return
+        except Exception as e:
+            logging.warning(f"Error checking if inviter {added_by.id} is admin: {e}")
 
     # Debounce: if captcha was already created for this user in the last 6 seconds, ignore duplicate trigger
     existing = PENDING_CAPTCHAS.get((chat_id, user_id))
