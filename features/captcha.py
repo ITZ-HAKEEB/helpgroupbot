@@ -170,6 +170,23 @@ UNRESTRICTED_PERMISSIONS = ChatPermissions(
 # Verification Start & Timeout
 # ─────────────────────────────────────────────────────────────────────────────
 
+def cancel_pending_captcha(chat_id, user_id, context=None):
+    """Cancels and cleans up any pending captcha when a user leaves the chat."""
+    key = (chat_id, user_id)
+    state = PENDING_CAPTCHAS.pop(key, None)
+    if state:
+        job = state.get("job")
+        if job:
+            try: job.schedule_removal()
+            except: pass
+        msg_id = state.get("message_id")
+        if msg_id and context:
+            try:
+                import asyncio
+                asyncio.create_task(context.bot.delete_message(chat_id=chat_id, message_id=msg_id))
+            except: pass
+
+
 async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_TYPE):
     """Initiates newcomer verification test according to chat settings."""
     chat_id = chat.id
@@ -183,6 +200,24 @@ async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_T
         from handlers.welcome import send_welcome
         await send_welcome(chat, user, context)
         return
+
+    # Debounce: if captcha was already created for this user in the last 6 seconds, ignore duplicate trigger
+    existing = PENDING_CAPTCHAS.get((chat_id, user_id))
+    if existing and (time.time() - existing.get("created_at", 0)) < 6:
+        logging.info(f"Captcha already pending for user {user_id} in {chat_id}, skipping duplicate trigger.")
+        return
+
+    # If there is an older pending captcha (e.g. from previous join), clean it up first
+    old_state = PENDING_CAPTCHAS.pop((chat_id, user_id), None)
+    if old_state:
+        old_job = old_state.get("job")
+        if old_job:
+            try: old_job.schedule_removal()
+            except: pass
+        old_msg_id = old_state.get("message_id")
+        if old_msg_id:
+            try: await context.bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
+            except: pass
 
     test_type = settings.get("captcha_type", "button").lower()
     timeout = int(settings.get("captcha_timeout", 120))

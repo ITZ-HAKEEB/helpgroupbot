@@ -472,6 +472,11 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for member in update.message.new_chat_members:
         if member.is_bot: continue
+        try:
+            from managers.user_manager_mongo import is_user_admin
+            if await is_user_admin(chat.id, member.id, context):
+                continue
+        except: pass
         if captcha_active:
             from features.captcha import start_captcha_verification
             await start_captcha_verification(chat, member, context)
@@ -485,6 +490,10 @@ async def on_left_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     left_user = update.message.left_chat_member
     if left_user.is_bot:
         return
+    try:
+        from features.captcha import cancel_pending_captcha
+        cancel_pending_captcha(update.effective_chat.id, left_user.id, context)
+    except: pass
     await send_goodbye(update.effective_chat, left_user, context)
 
 async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -538,37 +547,58 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
                     logging.info(f"Reactions for chat {chat_id} blocked on bot join.")
                 except: pass
     
-    # Active statuses that should receive a welcome message
+    # Active statuses that indicate the user is in the group
     active_statuses = ['member', 'administrator', 'restricted']
-    
-    # Non-active statuses from which a user can "join" or transition to
     inactive_statuses = ['left', 'kicked', 'none']
 
-    # Trigger welcome if moving from inactive to active
-    is_joining = new_status in active_statuses and old_status in inactive_statuses
+    # Check Telegram's is_member field on ChatMemberRestricted (handles users who were previously restricted by captcha)
+    was_member = (old_status in ['member', 'administrator', 'creator']) or (
+        old_status == 'restricted' and getattr(result.old_chat_member, 'is_member', True)
+    )
+    is_member_now = (new_status in ['member', 'administrator', 'creator']) or (
+        new_status == 'restricted' and getattr(result.new_chat_member, 'is_member', False)
+    )
+
+    # Trigger join if transitioning from non-member to member
+    is_joining = (not was_member and is_member_now) or (old_status in inactive_statuses and new_status in active_statuses)
     
     if is_joining:
         member = result.new_chat_member.user
         if member.is_bot:
             return
             
-        # If it's a rejoin (was previously left or kicked), check the rejoin setting
-        if old_status in ['left', 'kicked']:
-            if not settings.get("welcome_rejoin_enabled", True):
-                logging.info(f"Skipping welcome for re-joining user {member.id} in {chat_id} as welcome_rejoin_enabled is False")
+        # Skip admins from captcha
+        try:
+            from managers.user_manager_mongo import is_user_admin
+            if await is_user_admin(chat_id, member.id, context):
                 return
-        
+        except: pass
+
+        # Captcha verification: ALWAYS triggers every time a member joins or re-joins!
         if settings.get("captcha_enabled", False):
             from features.captcha import start_captcha_verification
             await start_captcha_verification(update.effective_chat, member, context)
-        else:
-            await send_welcome(update.effective_chat, member, context)
+            return
 
-    # Trigger goodbye if moving from active to inactive
-    is_leaving = old_status in active_statuses and new_status in inactive_statuses
+        # If captcha is not enabled, check welcome_rejoin_enabled for standard welcome text
+        is_rejoin = old_status in ['left', 'kicked'] or (old_status == 'restricted' and not getattr(result.old_chat_member, 'is_member', True))
+        if is_rejoin:
+            if not settings.get("welcome_rejoin_enabled", True):
+                logging.info(f"Skipping welcome for re-joining user {member.id} in {chat_id} as welcome_rejoin_enabled is False")
+                return
+
+        await send_welcome(update.effective_chat, member, context)
+
+    # Trigger goodbye if transitioning from member to non-member
+    is_leaving = (was_member and not is_member_now) or (old_status in active_statuses and new_status in inactive_statuses)
     if is_leaving:
         member = result.old_chat_member.user
         if member and not member.is_bot:
+            # Clean up any pending captcha when user leaves
+            try:
+                from features.captcha import cancel_pending_captcha
+                cancel_pending_captcha(chat_id, member.id, context)
+            except: pass
             await send_goodbye(update.effective_chat, member, context)
 
 def get_welcome_handlers():
