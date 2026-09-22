@@ -256,6 +256,16 @@ async def cache_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     username = user.username
     first_name = user.first_name
     
+    # Track message ID for dmute/dban message deletion
+    chat = update.effective_chat
+    msg = update.effective_message
+    if chat and chat.type in ["group", "supergroup"] and msg:
+        try:
+            from features.message_tracker import track_user_message
+            track_user_message(chat.id, user_id, msg.message_id)
+        except Exception:
+            pass
+
     try:
         users_col = get_collection(COLLECTIONS["users"])
         if users_col is None:

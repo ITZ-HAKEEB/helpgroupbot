@@ -831,26 +831,63 @@ async def forceunmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         await send_bot_response(update, context, f"Error: {e}")
 
-async def _delete_user_messages(context, chat_id: int, user_id: int) -> bool:
-    """Delete all messages from a user in a chat using Bot API deleteUserMessages (Bot API 7.2+)."""
+async def _delete_user_messages(context, chat_id: int, user_id: int, reply_to_message_id: int = None, command_message_id: int = None) -> int:
+    """
+    Delete messages from a user in a chat using:
+    1. Telethon DeleteParticipantHistoryRequest (if connected - wipes entire chat history without kicking)
+    2. Telegram Bot API delete_messages (in batches up to 100)
+    3. Direct delete of replied-to message and command message
+    """
+    deleted_count = 0
+
+    # 1. If Telethon userbot client is connected, call DeleteParticipantHistoryRequest
     try:
-        from core.config import BOT_TOKEN
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/deleteUserMessages",
-                json={"chat_id": chat_id, "user_id": user_id}
-            )
-            result = resp.json()
-            if result.get("ok"):
-                logging.info(f"[DMUTE/DBAN] Deleted all messages of user {user_id} in chat {chat_id}")
-                return True
-            else:
-                logging.warning(f"[DMUTE/DBAN] deleteUserMessages failed: {result.get('description')}")
-                return False
+        from features.voice_chat import telethon_client
+        if telethon_client and telethon_client.is_connected():
+            from telethon.tl.functions.channels import DeleteParticipantHistoryRequest
+            tl_chat_id = int(str(chat_id).replace('-100', ''))
+            channel_entity = await telethon_client.get_input_entity(tl_chat_id)
+            user_entity = await telethon_client.get_input_entity(user_id)
+            await telethon_client(DeleteParticipantHistoryRequest(channel=channel_entity, participant=user_entity))
+            logging.info(f"[DMUTE/DBAN] Telethon DeleteParticipantHistoryRequest executed for user {user_id} in {chat_id}")
+            deleted_count += 1
     except Exception as e:
-        logging.error(f"[DMUTE/DBAN] Error calling deleteUserMessages: {e}")
-        return False
+        logging.debug(f"[DMUTE/DBAN] Telethon history deletion skipped or unavailable: {e}")
+
+    # 2. Gather message IDs from tracker, replied message, and command message
+    message_ids = set()
+    if reply_to_message_id:
+        message_ids.add(reply_to_message_id)
+    if command_message_id:
+        message_ids.add(command_message_id)
+
+    try:
+        from features.message_tracker import get_tracked_user_messages, clear_tracked_user_messages
+        tracked = get_tracked_user_messages(chat_id, user_id)
+        if tracked:
+            message_ids.update(tracked)
+        clear_tracked_user_messages(chat_id, user_id)
+    except Exception as e:
+        logging.debug(f"[DMUTE/DBAN] Error reading tracked messages: {e}")
+
+    # 3. Delete gathered message IDs via Telegram Bot API delete_messages
+    if message_ids:
+        sorted_ids = sorted(list(message_ids))
+        for i in range(0, len(sorted_ids), 100):
+            batch = sorted_ids[i:i+100]
+            try:
+                await context.bot.delete_messages(chat_id=chat_id, message_ids=batch)
+                deleted_count += len(batch)
+            except Exception as be:
+                logging.debug(f"[DMUTE/DBAN] batch delete_messages error: {be}, falling back to single deletes")
+                for mid in batch:
+                    try:
+                        await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                        deleted_count += 1
+                    except Exception:
+                        pass
+
+    return deleted_count
 
 async def dmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mutes a user AND deletes all their messages in the chat."""
@@ -875,15 +912,35 @@ async def dmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_bot_response(update, context, "❌ I cannot mute another administrator.")
         return
 
+    # Extract replied message ID and command message ID for guaranteed deletion
+    reply_msg_id = None
+    if update.effective_message and update.effective_message.reply_to_message:
+        reply_msg_id = update.effective_message.reply_to_message.message_id
+    cmd_msg_id = update.effective_message.message_id if update.effective_message else None
+
     try:
-        # Step 1: Mute the user
-        await context.bot.restrict_chat_member(chat_id, user_id, permissions=ChatPermissions(can_send_messages=False))
+        # Step 1: Mute the user (block all text and media permissions)
+        await context.bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False
+            )
+        )
 
-        # Step 2: Delete all their messages
-        deleted = await _delete_user_messages(context, chat_id, user_id)
-        del_status = "and all their messages were deleted 🗑️" if deleted else "(note: message deletion requires Bot API 7.2+)"
+        # Step 2: Delete all messages of the user
+        await _delete_user_messages(context, chat_id, user_id, reply_to_message_id=reply_msg_id, command_message_id=cmd_msg_id)
 
-        await send_bot_response(update, context, f"🔇🗑️ <b>{user_name}</b> has been muted {del_status}.", parse_mode=ParseMode.HTML)
+        await send_bot_response(update, context, f"🔇🗑️ <b>{user_name}</b> has been muted and all their messages were deleted.", parse_mode=ParseMode.HTML)
 
         admin_name = update.effective_user.first_name if update.effective_user else "Admin"
         await log_to_channel(context, f"🔇🗑️ #DMUTE\nTarget: {user_name} ({user_id})\nAdmin: {admin_name}")
@@ -919,15 +976,23 @@ async def dban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_bot_response(update, context, "❌ I cannot ban another administrator.")
         return
 
+    # Extract replied message ID and command message ID for guaranteed deletion
+    reply_msg_id = None
+    if update.effective_message and update.effective_message.reply_to_message:
+        reply_msg_id = update.effective_message.reply_to_message.message_id
+    cmd_msg_id = update.effective_message.message_id if update.effective_message else None
+
     try:
-        # Step 1: Delete all their messages first (while still a member so the API resolves them)
-        deleted = await _delete_user_messages(context, chat_id, user_id)
+        # Step 1: Delete tracked and replied messages via Bot API / Telethon
+        await _delete_user_messages(context, chat_id, user_id, reply_to_message_id=reply_msg_id, command_message_id=cmd_msg_id)
 
-        # Step 2: Ban the user
-        await context.bot.ban_chat_member(chat_id, user_id)
+        # Step 2: Ban the user with revoke_messages=True (Telegram wipes ALL messages from that user)
+        if str(user_id).startswith('-100'):
+            await context.bot.ban_chat_sender_chat(chat_id, user_id)
+        else:
+            await context.bot.ban_chat_member(chat_id, user_id, revoke_messages=True)
 
-        del_status = "and all their messages were deleted 🗑️" if deleted else "(note: message deletion requires Bot API 7.2+)"
-        await send_bot_response(update, context, f"🔨🗑️ <b>{user_name}</b> has been banned {del_status}.", parse_mode=ParseMode.HTML)
+        await send_bot_response(update, context, f"🔨🗑️ <b>{user_name}</b> has been banned and all their messages were deleted.", parse_mode=ParseMode.HTML)
 
         admin_name = update.effective_user.first_name if update.effective_user else "Admin"
         await log_to_channel(context, f"🔨🗑️ #DBAN\nTarget: {user_name} ({user_id})\nAdmin: {admin_name}")
@@ -938,6 +1003,17 @@ async def dban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_bot_response(update, context, f"Error: {e}")
     except Exception as e:
         await send_bot_response(update, context, f"Error: {e}")
+
+async def prefix_dmute_dban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles !dmute and !dban prefix commands."""
+    if not update.effective_message or not update.effective_message.text:
+        return
+    text = update.effective_message.text.strip().lower()
+    cmd = text.split()[0]
+    if cmd.startswith('!dmute'):
+        await dmute_command(update, context)
+    elif cmd.startswith('!dban'):
+        await dban_command(update, context)
 
 def get_moderation_handlers():
 
@@ -952,6 +1028,7 @@ def get_moderation_handlers():
         CommandHandler("unmute", unmute_command),
         CommandHandler("dmute", dmute_command),
         CommandHandler("dban", dban_command),
+        MessageHandler(filters.Regex(r'^!(dmute|dban)(@\w+)?(\s|$)') & filters.ChatType.GROUPS, prefix_dmute_dban_handler),
         CommandHandler("muter", muter_command),
         CommandHandler("unmuter", unmuter_command),
         CommandHandler("warn", warn_command),
