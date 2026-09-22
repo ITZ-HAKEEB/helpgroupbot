@@ -483,6 +483,15 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await send_welcome(chat, member, context)
                 continue
         except: pass
+
+        # If newcomer joined via accepted join request, bypass captcha!
+        try:
+            from features.join_request import is_recent_approved_join_request
+            if is_recent_approved_join_request(chat.id, member.id):
+                logging.info(f"User {member.id} joined via accepted join request in chat {chat.id}, bypassing captcha.")
+                await send_welcome(chat, member, context)
+                continue
+        except: pass
         if captcha_active:
             from features.captcha import start_captcha_verification
             await start_captcha_verification(chat, member, context)
@@ -591,6 +600,21 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
                     return
             except Exception as e:
                 logging.warning(f"Error checking if actor is admin: {e}")
+
+        # If newcomer joined via accepted join request, bypass captcha!
+        try:
+            from features.join_request import is_recent_approved_join_request
+            via_join_req = (
+                getattr(result, "via_join_request", False) or
+                bool(getattr(result, "invite_link", None) and getattr(result.invite_link, "creates_join_request", False)) or
+                is_recent_approved_join_request(chat_id, member.id)
+            )
+            if via_join_req:
+                logging.info(f"User {member.id} joined via accepted join request in chat {chat_id}, bypassing captcha.")
+                await send_welcome(update.effective_chat, member, context)
+                return
+        except Exception as e:
+            logging.warning(f"Error checking if user joined via join request: {e}")
 
         # Captcha verification: ALWAYS triggers every time a member joins or re-joins on their own!
         if settings.get("captcha_enabled", False):

@@ -213,6 +213,17 @@ async def start_captcha_verification(chat, user, context: ContextTypes.DEFAULT_T
         except Exception as e:
             logging.warning(f"Error checking if inviter {added_by.id} is admin: {e}")
 
+    # If the user joined via accepted join request, bypass captcha!
+    try:
+        from features.join_request import is_recent_approved_join_request
+        if is_recent_approved_join_request(chat_id, user_id):
+            logging.info(f"User {user_id} joined via accepted join request in chat {chat_id}, bypassing captcha.")
+            from handlers.welcome import send_welcome
+            await send_welcome(chat, user, context)
+            return
+    except Exception as e:
+        logging.warning(f"Error checking if user joined via join request: {e}")
+
     # Debounce: if captcha was already created for this user in the last 6 seconds, ignore duplicate trigger
     existing = PENDING_CAPTCHAS.get((chat_id, user_id))
     if existing and (time.time() - existing.get("created_at", 0)) < 6:

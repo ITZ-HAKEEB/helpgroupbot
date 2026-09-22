@@ -1,10 +1,33 @@
 import logging
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ChatJoinRequestHandler, CommandHandler, CallbackQueryHandler
 from telegram.constants import ParseMode
 from managers.settings_manager_mongo import get_chat_settings, update_chat_setting
 from managers.user_manager_mongo import is_user_admin
 from core.config import colored_button, log_to_channel, send_bot_response
+
+# In-memory tracking of approved join requests: (chat_id, user_id) -> timestamp
+_APPROVED_JOIN_REQUESTS: dict[tuple[int, int], float] = {}
+
+def record_approved_join_request(chat_id: int, user_id: int):
+    """Record that a user's join request was approved so captcha can be bypassed upon joining."""
+    now = time.time()
+    # Clean up entries older than 30 minutes
+    to_delete = [k for k, t in _APPROVED_JOIN_REQUESTS.items() if now - t > 1800]
+    for k in to_delete:
+        _APPROVED_JOIN_REQUESTS.pop(k, None)
+    _APPROVED_JOIN_REQUESTS[(chat_id, user_id)] = now
+    logging.info(f"Recorded approved join request for user {user_id} in chat {chat_id}")
+
+def is_recent_approved_join_request(chat_id: int, user_id: int, max_age_seconds: int = 1800) -> bool:
+    """Check if user joined via an approved join request within the last max_age_seconds."""
+    now = time.time()
+    ts = _APPROVED_JOIN_REQUESTS.get((chat_id, user_id))
+    if ts and (now - ts <= max_age_seconds):
+        return True
+    return False
+
 
 def _is_dm_blocked_error(err: str) -> bool:
     """Return True if the error indicates the bot cannot initiate a DM with the user.
@@ -146,6 +169,7 @@ async def handle_chat_join_request(update: Update, context: ContextTypes.DEFAULT
 
     if mode == "accept":
         try:
+            record_approved_join_request(chat_id, user_id)
             await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
             logging.info(f"Auto-approved join request for user {user_id} in chat {chat_id}")
             await log_to_channel(context, f"✅ <b>Auto-Approved Join Request</b>\nUser: {user.mention_html()} (<code>{user_id}</code>)\nGroup: <b>{chat.title}</b>")
@@ -471,6 +495,7 @@ async def join_request_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 logging.warning(f"Could not fetch group chat for {target_chat_id}: {ge}")
 
             try:
+                record_approved_join_request(target_chat_id, target_user_id)
                 await context.bot.approve_chat_join_request(chat_id=target_chat_id, user_id=target_user_id)
                 # Try to update the card UI — non-fatal on failure
                 try:
