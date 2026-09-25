@@ -89,6 +89,9 @@ DEFAULT_CHAT_SETTINGS = {
     "captcha_type": "button", # "simple", "button", "digits", "image"
     "captcha_timeout": 120,    # seconds before action
     "captcha_action": "kick",  # "kick", "mute", "ban"
+    # Premium user boost gate
+    "premium_boost_enabled": True,
+    "premium_boost_count": 4,
     # Recurring messages settings
     "recurring_messages": [
         {
