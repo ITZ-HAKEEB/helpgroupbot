@@ -1410,9 +1410,12 @@ def main():
     for handler in get_captcha_handlers():
         application.add_handler(handler)
 
-    # Add Premium Boost handlers (Group 0)
+    # Add Premium Boost Captcha handlers (Group 6 for member join & message checks, Group 0 for commands/callbacks)
     for handler in get_premium_boost_handlers():
-        application.add_handler(handler)
+        if isinstance(handler, (CommandHandler, CallbackQueryHandler)):
+            application.add_handler(handler, group=0)
+        else:
+            application.add_handler(handler, group=6)
 
     # Add block content handlers (Group 0)
     for handler in get_block_content_handlers():

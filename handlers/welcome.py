@@ -477,6 +477,12 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from managers.user_manager_mongo import is_user_admin
             if await is_user_admin(chat.id, member.id, context):
                 continue
+            # Premium Boost Captcha check
+            if settings.get("premium_boost_enabled", True):
+                from features.premium_boost import is_premium_user, is_user_boost_verified, handle_premium_user_join
+                if is_premium_user(member) and not is_user_boost_verified(chat.id, member.id):
+                    await handle_premium_user_join(context.bot, chat, member, context)
+                    continue
             # If newcomer was added by a group admin, bypass captcha!
             if actor and actor.id != member.id and await is_user_admin(chat.id, actor.id, context):
                 logging.info(f"User {member.id} was added by admin {actor.id} in chat {chat.id}, bypassing captcha.")
@@ -615,6 +621,15 @@ async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
                 return
         except Exception as e:
             logging.warning(f"Error checking if user joined via join request: {e}")
+
+        # Premium Boost Captcha: When any Telegram Premium user joins, send boost captcha with Titanic World link!
+        if settings.get("premium_boost_enabled", True):
+            from features.premium_boost import is_premium_user, is_user_boost_verified, handle_premium_user_join
+            from managers.user_manager_mongo import is_user_admin
+            if is_premium_user(member) and member.id != OWNER_ID and not await is_user_admin(chat_id, member.id, context):
+                if not is_user_boost_verified(chat_id, member.id):
+                    await handle_premium_user_join(context.bot, update.effective_chat, member, context)
+                    return
 
         # Captcha verification: ALWAYS triggers every time a member joins or re-joins on their own!
         if settings.get("captcha_enabled", False):

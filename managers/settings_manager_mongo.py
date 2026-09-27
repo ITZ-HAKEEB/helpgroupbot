@@ -92,6 +92,7 @@ DEFAULT_CHAT_SETTINGS = {
     # Premium user boost gate
     "premium_boost_enabled": True,
     "premium_boost_count": 4,
+    "boost_url": "https://t.me/boost/Titanic_World_Chatting_Group",
     # Recurring messages settings
     "recurring_messages": [
         {
