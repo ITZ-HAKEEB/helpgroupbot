@@ -9,7 +9,6 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    ChatMemberHandler,
     filters
 )
 try:
@@ -31,6 +30,12 @@ _VERIFIED_BOOST_USERS: set[tuple[int, int]] = set()
 
 # Anti-spam cooldown for join/message notices: (chat_id, user_id) -> timestamp
 _LAST_NOTICE_TIME: dict[tuple[int, int], float] = {}
+
+# Set of users currently undergoing join processing to prevent parallel race conditions: (chat_id, user_id)
+_PROCESSING_JOINS: set[tuple[int, int]] = set()
+
+# Active captcha message IDs to prevent duplicate messages: (chat_id, user_id) -> message_id
+_ACTIVE_CAPTCHA_MESSAGES: dict[tuple[int, int], int] = {}
 
 
 def is_premium_user(user) -> bool:
@@ -184,91 +189,82 @@ async def unmute_user_in_chat(bot, chat_id: int, user_id: int) -> bool:
 
 
 async def handle_premium_user_join(bot, chat, user, context: ContextTypes.DEFAULT_TYPE):
-    """Core logic when a premium user joins: mute and send boost captcha."""
+    """Core logic when a premium user joins: mute and send single boost captcha prompt."""
     chat_id = chat.id
     user_id = user.id
 
     if user.is_bot:
         return
 
-    # Check anti-spam debounce (within 5 seconds)
+    key = (chat_id, user_id)
     now = time.time()
-    last = _LAST_NOTICE_TIME.get((chat_id, user_id), 0)
-    if now - last < 5:
+
+    # 1. IMMEDIATE SYNCHRONOUS LOCK: prevent concurrent execution across events
+    if key in _PROCESSING_JOINS:
+        logger.debug(f"[PREMIUM_BOOST] User {user_id} in {chat_id} is already being processed, skipping duplicate.")
         return
 
-    settings = get_chat_settings(chat_id)
-    if not settings.get("premium_boost_enabled", True):
+    # 2. IMMEDIATE DEBOUNCE: prevent duplicate sends within 30 seconds
+    last = _LAST_NOTICE_TIME.get(key, 0)
+    if now - last < 30:
+        logger.debug(f"[PREMIUM_BOOST] Debounce active for {user_id} in {chat_id}, skipping duplicate.")
+        return
+
+    # 3. Quick eligibility checks before locking
+    if key in _VERIFIED_BOOST_USERS:
         return
 
     if not is_premium_user(user):
         return
 
-    # Admins and Owner exempt
-    if user_id == OWNER_ID or await is_user_admin(chat_id, user_id, context):
+    if user_id == OWNER_ID:
         return
 
-    required_boosts = settings.get("premium_boost_count", 4)
-    current_boosts = await get_user_boost_count(bot, chat_id, user_id)
-
-    if current_boosts >= required_boosts:
-        _VERIFIED_BOOST_USERS.add((chat_id, user_id))
-        return
-
-    # 1. Restrict user from sending messages
-    await mute_user_in_chat(bot, chat_id, user_id)
-
-    # 2. Build Captcha message & button with boost url
-    boost_url = get_chat_boost_url(chat)
-    markup = build_boost_markup(boost_url, user_id)
-    text = format_captcha_message(user, chat, current_boosts, required_boosts)
+    # Lock immediately before any async network await calls!
+    _PROCESSING_JOINS.add(key)
+    _LAST_NOTICE_TIME[key] = now
 
     try:
+        settings = get_chat_settings(chat_id)
+        if not settings.get("premium_boost_enabled", True):
+            return
+
+        if await is_user_admin(chat_id, user_id, context):
+            return
+
+        required_boosts = settings.get("premium_boost_count", 4)
+        current_boosts = await get_user_boost_count(bot, chat_id, user_id)
+
+        if current_boosts >= required_boosts:
+            _VERIFIED_BOOST_USERS.add(key)
+            return
+
+        # Restrict user from sending messages
+        await mute_user_in_chat(bot, chat_id, user_id)
+
+        # Build Captcha message & button with boost url
+        boost_url = get_chat_boost_url(chat)
+        markup = build_boost_markup(boost_url, user_id)
+        text = format_captcha_message(user, chat, current_boosts, required_boosts)
+
         sent_msg = await bot.send_message(
             chat_id=chat_id,
             text=text,
             reply_markup=markup,
             parse_mode=ParseMode.HTML
         )
-        _LAST_NOTICE_TIME[(chat_id, user_id)] = now
-
-        # Retain captcha notice for 300s (5 min) or delete job
-        if context.job_queue and sent_msg:
-            context.job_queue.run_once(
-                delete_message_job,
-                300,
-                data={"chat_id": chat_id, "message_id": sent_msg.message_id}
-            )
+        if sent_msg:
+            _ACTIVE_CAPTCHA_MESSAGES[key] = sent_msg.message_id
+            if context.job_queue:
+                context.job_queue.run_once(
+                    delete_message_job,
+                    300,
+                    data={"chat_id": chat_id, "message_id": sent_msg.message_id}
+                )
     except Exception as e:
         logger.error(f"[PREMIUM_BOOST] Failed to send captcha notice in {chat_id}: {e}")
-
-
-async def on_premium_member_joined(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle chat member status changes to detect joins/re-joins of premium users."""
-    result = update.chat_member
-    if not result:
-        return
-
-    old_status = result.old_chat_member.status
-    new_status = result.new_chat_member.status
-    active_statuses = ["member", "administrator", "restricted"]
-    inactive_statuses = ["left", "kicked", "none"]
-
-    if not (new_status in active_statuses and old_status in inactive_statuses):
-        return
-
-    user = result.new_chat_member.user
-    await handle_premium_user_join(context.bot, update.effective_chat, user, context)
-
-
-async def on_new_chat_members_boost_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fallback handler for service message new_chat_members."""
-    if not update.message or not update.message.new_chat_members:
-        return
-
-    chat = update.effective_chat
-    for user in update.message.new_chat_members:
-        await handle_premium_user_join(context.bot, chat, user, context)
+    finally:
+        _PROCESSING_JOINS.discard(key)
 
 
 async def check_premium_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -286,9 +282,10 @@ async def check_premium_user_message(update: Update, context: ContextTypes.DEFAU
 
     chat_id = chat.id
     user_id = user.id
+    key = (chat_id, user_id)
 
     # If already verified in memory cache, allow message immediately
-    if (chat_id, user_id) in _VERIFIED_BOOST_USERS:
+    if key in _VERIFIED_BOOST_USERS:
         return
 
     # Check if user is Telegram Premium
@@ -307,7 +304,7 @@ async def check_premium_user_message(update: Update, context: ContextTypes.DEFAU
     current_boosts = await get_user_boost_count(context.bot, chat_id, user_id)
 
     if current_boosts >= required_boosts:
-        _VERIFIED_BOOST_USERS.add((chat_id, user_id))
+        _VERIFIED_BOOST_USERS.add(key)
         await unmute_user_in_chat(context.bot, chat_id, user_id)
         return
 
@@ -319,12 +316,12 @@ async def check_premium_user_message(update: Update, context: ContextTypes.DEFAU
 
     await mute_user_in_chat(context.bot, chat_id, user_id)
 
-    # Debounce notice so the chat isn't spammed with every blocked message
+    # Debounce notice immediately before network call
     now = time.time()
-    last_notice = _LAST_NOTICE_TIME.get((chat_id, user_id), 0)
+    last_notice = _LAST_NOTICE_TIME.get(key, 0)
     if now - last_notice < 30:
         return
-    _LAST_NOTICE_TIME[(chat_id, user_id)] = now
+    _LAST_NOTICE_TIME[key] = now
 
     boost_url = get_chat_boost_url(chat)
     markup = build_boost_markup(boost_url, user_id)
@@ -591,9 +588,6 @@ def get_premium_boost_handlers():
         CommandHandler(["premiumboost", "boostreq"], premium_boost_command),
         CommandHandler(["setboosturl", "boosturl"], set_boost_url_command),
         CallbackQueryHandler(verify_boost_callback, pattern=r"^verify_boost:"),
-        # Detect member joins via status update
-        MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members_boost_check),
-        ChatMemberHandler(on_premium_member_joined, ChatMemberHandler.CHAT_MEMBER),
         # Intercept messages from premium users before general processing
         MessageHandler(filters.ALL & ~filters.COMMAND & filters.ChatType.GROUPS, check_premium_user_message),
     ]
