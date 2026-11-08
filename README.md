@@ -50,8 +50,8 @@ A powerful, feature-rich Telegram bot for group management with AI capabilities,
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/nishkarshk212/titanic-saver.git
-cd titanic-saver
+git clone https://github.com/ITZ-HAKEEB/helpgroupbot
+cd helpgroupbot
 ```
 
 ### 2. Install Dependencies
