@@ -62,11 +62,11 @@ def _start_keyboard(add_to_group_url):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(colored_button(to_small_caps("ᴀᴅᴅ ᴍᴇ ɪɴ ɢʀᴏᴜᴘ"), "green"), url=add_to_group_url)],
         [
-            InlineKeyboardButton(colored_button("𝗠𝘂𝘀𝗶𝗰 𝗪𝗼𝗿𝗹𝗱", "green"), callback_data="music_world")
+            InlineKeyboardButton(colored_button("𝗠𝘂𝘀𝗶𝗰 𝗪𝗼𝗿𝗹𝗱", "green"), callback_data="llNOBI_UPDATESll")
         ],
         [
-            InlineKeyboardButton(colored_button(to_small_caps("「 Support 」"), "green"), url="https://t.me/titanic_network"),
-            InlineKeyboardButton(colored_button(to_small_caps("「 Updates 」"), "green"), url="https://t.me/Developer_World_Advay")
+            InlineKeyboardButton(colored_button(to_small_caps("「 Support 」"), "green"), url="https://t.me/llNOBI_UPDATESll"),
+            InlineKeyboardButton(colored_button(to_small_caps("「 Updates 」"), "green"), url="https://t.me/llNOBI_UPDATESll")
         ],
         [
             InlineKeyboardButton(colored_button(to_small_caps("「 Owner 」"), "green"), url=f"tg://user?id={OWNER_ID}")
@@ -163,13 +163,7 @@ async def start(update, context):
 
 # Music World bots (label -> username link)
 MUSIC_WORLD_BOTS = [
-    ("𝑳𝒊𝒍𝒚 🦢 ♪", "https://t.me/Lilyy_music_bot"),
-    ("𓂃❛ ⟶̽ 𝑺𝒉𝒓𝒂𝒅𝒉𝒂 ⌯ <𝟑⤹🤍", "https://t.me/shraddha_musicbot"),
-    ("❛ 𝙄𝙨𝙝𝙪 ✗ 𝙈𝙪𝙨𝙞𝙘 ❜", "https://t.me/Ishu_musics_bot"),
-    ("❛ ʀᴀᴅʜɪᴋᴀ ✗ ᴍᴜѕɪᴄ ❜🥂", "https://t.me/RadhikaX_bot"),
-    ("ɪɴꜰɪ x ᴍᴜꜱɪᴄ 🥂", "https://t.me/infixmusicx_bot"),
-    ("вιℓℓυ χ мυѕι¢ 🎶", "https://t.me/billuxmusicc_bot"),
-    ("❛ 𝑳𝒊𝒍𝒚 ✗ 𝑴𝒖𝒔𝒊𝒄 ❜", "https://t.me/lilly_music_pro_bot"),
+    ("˹ Aɴɴᴜ ┋ 𐌼 ᥙ s ɪ ᴄ ˼ㅤ 🇮🇳 ♪ ", "https://t.me/Annuprobot"),
 ]
 
 async def music_world_callback(update, context):
